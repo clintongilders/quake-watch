@@ -38,6 +38,10 @@ use ApiPlatform\Metadata\QueryParameter;
             filter: new SortFilter(),
             property: 'occurredAt',
         ),
+        'sortDepth' => new QueryParameter(
+            filter: new SortFilter(),
+            property: 'depth',
+        ),
         'sortMagnitude' => new QueryParameter(
             filter: new SortFilter(),
             property: 'magnitude',

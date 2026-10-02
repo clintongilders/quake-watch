@@ -1,18 +1,21 @@
 # Quake Watch
 
-Quake Watch is an earthquake explorer built with React, TypeScript, and a Symfony API. It imports earthquake records from the USGS past-day GeoJSON feed into PostgreSQL and displays them in a paginated table.
+Quake Watch is an earthquake explorer built with React, TypeScript, and a Symfony API. It imports recent and historical USGS earthquake records into PostgreSQL and displays them on an interactive map and in a paginated table.
 
 ## Features
 
 - View earthquake magnitude, location, occurrence time, and depth in kilometres.
 - Filter by minimum magnitude: All, 2+, 3+, 4+, or 5+.
 - Navigate results with Previous and Next controls.
-- Explore the current page on an interactive map, with magnitude-sized markers, depth colours, and USGS detail links.
-- Filter by a UTC date range and refresh results automatically every minute.
+- Sort all filtered results by magnitude, time, or depth using the table headers.
+- Select a table row to highlight its earthquake on the map and open its details.
+- Explore all filtered results on an interactive map, with magnitude-sized markers, depth colours, and USGS detail links.
+- Choose the last 24 hours, 7 days, 30 days, or a custom UTC date/time range.
+- Apply or reset filters and enable automatic refresh.
 - Browse records newest first, with times displayed in the browser's local timezone.
 - See loading, error, and empty-result states.
 
-The API also exposes coordinates and supports magnitude, depth, date, and sorting filters. Run the import watcher for automatic USGS updates every five minutes. The browser refreshes API results every minute; you can pause this or refresh manually.
+The API also exposes coordinates and supports magnitude, depth, date, and sorting filters. Run the import watcher for automatic USGS updates every five minutes. Browser auto-refresh runs one minute after map loading finishes; you can turn it off or refresh manually.
 
 ## Project structure
 
@@ -26,11 +29,12 @@ backend/
   compose.yaml                            PostgreSQL container
 frontend/
   src/App.tsx                             Application shell
-  src/components/EarthquakeList.tsx        Results, filters, and pagination
+  src/components/EarthquakeList.tsx        Filters, sorting, selection, and pagination
+  src/components/EarthquakeMap.tsx         Leaflet map, markers, and selected-quake popup
   vite.config.ts                          Vite development configuration
 ```
 
-The backend uses Symfony 8.1, API Platform 5, and Doctrine ORM. The frontend uses React 19, TypeScript 6, Vite 8, and Oxlint.
+The backend uses Symfony 8.1, API Platform 5, and Doctrine ORM. The frontend uses React 19, TypeScript 6, Vite 8, Leaflet 1.9, and Oxlint.
 
 ## Requirements
 
@@ -151,8 +155,6 @@ php bin/console app:import-earthquakes --watch
 
 It imports immediately, then repeats five minutes after each run. Keep the process running; Ctrl+C stops it. Failed imports are reported and retried on the next cycle. Symfony Lock prevents overlapping imports on this machine (`LOCK_DSN=flock`). For multiple hosts, configure a shared lock store. Production can run the watcher under a process supervisor or schedule the one-shot command.
 
-The browser's “Results fetched” time records its last successful API fetch, not the last USGS import. Quick ranges cover the last 24 hours (default), 7 days, or 30 days and move forward on refresh. Choose Custom for inclusive UTC From and Through timestamps. Edit the filters, then select Apply filters; Reset restores all magnitudes and the last 24 hours. Auto-refresh uses the applied filters without applying unfinished edits. On mobile, switch between Map and Table; desktop shows both. Pagination displays the visible result range and total pages. The Per page selector offers 10, 30 (default), 50, or 100 results and returns to page 1 when changed. The API accepts `itemsPerPage`, capped at 100. The map and table show the same page, not all matching earthquakes. Map tiles require internet access and are attributed to OpenStreetMap.
-
 ### Historical imports
 
 Import an inclusive range of UTC calendar days from the USGS earthquake catalogue:
@@ -167,6 +169,34 @@ Progress is saved in batches of 100 records; ORM entities and debug query histor
 
 Catalogue documentation: [USGS earthquake web service](https://earthquake.usgs.gov/fdsnws/event/1/).
 
+## Using the explorer
+
+### Filters and refresh
+
+The initial view covers the **last 24 hours**, with all magnitudes included. Choose **7 days**, **30 days**, or **Custom** for a different range. Custom From and Through values are inclusive UTC timestamps; table and popup times are displayed in your browser's local timezone.
+
+Edit the range or minimum magnitude, then select **Apply**. Unapplied edits do not affect displayed results or automatic refresh. **Reset** restores all magnitudes and the last 24 hours and returns the table to page 1. Rolling ranges advance when filters are applied or results are refreshed; changing table pages keeps the same time boundaries.
+
+**Auto-refresh** is enabled by default. It waits until map loading finishes, then refreshes one minute later. **Refresh** reloads the applied filters manually. The **Updated** time is the last successful table API fetch, not the last USGS import or map-loading completion.
+
+### Map
+
+The map loads **all earthquakes matching the applied filters**, independently of the table's page and page size. It follows API pages in batches of 100, displays loading progress, and cancels unfinished requests when filters change. Large historical ranges can take longer to load. A failed map request shows an error; use **Refresh** to retry.
+
+Marker size represents magnitude. Depth colours distinguish shallow events (under 70 km), intermediate events (70–300 km), and deep events (300 km or more). Select a marker to open its details and USGS link. Map tiles require internet access and are attributed to OpenStreetMap.
+
+Drag the handle below the map to adjust its height between 240 and 1,000 pixels. You can also focus the handle and use Up/Down arrows; Home and End select the minimum and maximum heights. The map redraws automatically as its size changes.
+
+On mobile, switch between **Map** and **Table**; desktop shows both.
+
+### Table, sorting, and selection
+
+The toolbar **above the table** contains the visible result range (for example, `1–30 of 187 earthquakes`), **Per page**, and **Page X of Y** navigation. Result-range and pagination controls also appear below the table. Page sizes are 10, 30 (default), 50, and 100; changing the size returns to page 1 and does not change the map's results.
+
+Select the **Magnitude**, **Time**, or **Depth** header to sort the entire filtered dataset, rather than just the visible page. New sort columns start descending; selecting the active header again switches direction. Arrows indicate the current direction and remain beside the header label. Sorting returns to page 1; the initial order is newest first.
+
+Select a row to highlight it and its map marker, centre the map on the earthquake, and open its popup. The location button provides keyboard access to the same action. On mobile, selecting a row switches to the map. Applying filters clears the selection.
+
 ## API
 
 Earthquake resources expose read-only collection and item operations:
@@ -176,16 +206,18 @@ Earthquake resources expose read-only collection and item operations:
 | `GET /api/earthquakes` | Paginated earthquake collection, newest first by default. |
 | `GET /api/earthquakes/{id}` | One earthquake by its database ID. |
 
-The collection includes `member`, `totalItems`, and pagination information under `view`. The frontend uses `view.next` to enable the Next button.
+The collection includes `member`, `totalItems`, and pagination information under `view`. The frontend uses `view.next` to enable the Next button and load subsequent map pages, and `view.last` to determine the table page count. `itemsPerPage` defaults to 30 and is capped at 100.
 
 Example requests:
 
 ```sh
 curl 'https://127.0.0.1:8000/api/earthquakes?page=1'
 curl 'https://127.0.0.1:8000/api/earthquakes?magnitude%5Bgte%5D=3&page=1'
+curl 'https://127.0.0.1:8000/api/earthquakes?sortDepth=asc&itemsPerPage=100'
+curl 'https://127.0.0.1:8000/api/earthquakes?occurredAt%5Bafter%5D=2026-09-01T00:00:00Z&occurredAt%5Bbefore%5D=2026-09-30T23:59:59Z'
 ```
 
-The second request selects earthquakes with magnitude greater than or equal to 3. The entity also configures comparison filters for depth, a date filter for `occurredAt`, and sorting parameters named `sortOccurredAt` and `sortMagnitude`.
+The second request selects earthquakes with magnitude greater than or equal to 3. The entity also configures comparison filters for depth, a date filter for `occurredAt`, and sorting parameters named `sortOccurredAt`, `sortMagnitude`, and `sortDepth`, each accepting `asc` or `desc`.
 
 Each record contains `id`, `usgsId`, `magnitude`, `place`, `occurredAt`, `latitude`, `longitude`, and `depth`.
 
@@ -220,7 +252,8 @@ Importer coverage is available with `php vendor/bin/phpunit tests/Command`. The 
 | Database and app secrets | `backend/.env.local` locally; environment variables or Symfony secrets for production. |
 | API URL | Hardcoded in `frontend/src/components/EarthquakeList.tsx` as `https://127.0.0.1:8000/api/earthquakes`. |
 | CORS | `backend/config/packages/nelmio_cors.yaml` allows `http://localhost:5173` for API GET and OPTIONS requests. |
-| Import source | USGS past-day feed URL in `ImportEarthquakesCommand.php`. |
+| Import sources | USGS past-day feed and historical catalogue query endpoint in `ImportEarthquakesCommand.php`. |
+| Import lock | `LOCK_DSN=flock` by default; configure a shared store for multiple hosts. |
 
 Although `.env` defines `CORS_ALLOW_ORIGIN`, the current CORS YAML uses a literal origin; changing that environment variable alone does not change the allowed frontend origin.
 
@@ -238,4 +271,4 @@ For deployment, replace the frontend's local API URL with the deployed endpoint,
 
 ## Data source
 
-Earthquake data is imported from the [USGS past-day GeoJSON feed](https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_day.geojson). The table reflects stored imports rather than a live stream.
+Recent data comes from the [USGS past-day GeoJSON feed](https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_day.geojson); historical imports use the USGS earthquake catalogue. The map and table reflect stored imports rather than a live stream. Changing browser dates does not automatically import missing history.
