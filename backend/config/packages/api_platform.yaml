@@ -1,5 +1,5 @@
 api_platform:
-    title: Hello API Platform
+    title: QuakeWatch API
     version: 1.0.0
     defaults:
         stateless: true
@@ -7,4 +7,6 @@ api_platform:
         pagination_client_items_per_page: true
         pagination_maximum_items_per_page: 100
         cache_headers:
+            max_age: 60
+            shared_max_age: 60
             vary: ['Content-Type', 'Authorization', 'Origin']

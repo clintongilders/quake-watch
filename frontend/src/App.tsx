@@ -1,4 +1,4 @@
-import EarthquakeList from './components/EarthquakeList';
+import EarthquakeList from "./components/EarthquakeList";
 
 function App() {
   return (

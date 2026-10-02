@@ -1,29 +1,25 @@
 <?php
+
 namespace App\Tests\Controller;
 
 use App\Entity\Earthquake;
-use Doctrine\ORM\EntityManagerInterface;
-use Doctrine\ORM\Tools\SchemaTool;
+use App\Tests\Support\Database;
 use PHPUnit\Framework\Attributes\DataProvider;
 use Symfony\Bundle\FrameworkBundle\KernelBrowser;
 use Symfony\Bundle\FrameworkBundle\Test\WebTestCase;
 
-/** Uses a fresh in-memory database, never development data. */
+/** Runs on SQLite locally or PostgreSQL in CI, never development data. */
 final class EarthquakeControllerTest extends WebTestCase
 {
+    use Database;
     private KernelBrowser $client;
-    private array $previousUrl;
 
     protected function setUp(): void
     {
         parent::setUp();
-        $this->previousUrl = [$_ENV['DATABASE_URL'] ?? null, $_SERVER['DATABASE_URL'] ?? null, getenv('DATABASE_URL')];
-        $_ENV['DATABASE_URL'] = $_SERVER['DATABASE_URL'] = 'sqlite:///:memory:';
-        putenv('DATABASE_URL=sqlite:///:memory:');
         $this->client = static::createClient();
         $this->client->disableReboot();
-        $manager = static::getContainer()->get(EntityManagerInterface::class);
-        (new SchemaTool($manager))->createSchema([$manager->getClassMetadata(Earthquake::class)]);
+        $manager = $this->freshDatabase();
         foreach ([[1, 2.0, 30.0], [2, 5.0, 10.0], [3, 3.0, 20.0]] as [$day, $magnitude, $depth]) {
             $manager->persist((new Earthquake())->setUsgsId('test-'.$day)->setPlace('Test '.$day)
                 ->setMagnitude($magnitude)->setDepth($depth)->setLatitude(49)->setLongitude(-123)
@@ -32,20 +28,11 @@ final class EarthquakeControllerTest extends WebTestCase
         $manager->flush();
     }
 
-    protected function tearDown(): void
-    {
-        parent::tearDown();
-        foreach (['_ENV', '_SERVER'] as $index => $name) {
-            if ($this->previousUrl[$index] === null) unset($GLOBALS[$name]['DATABASE_URL']);
-            else $GLOBALS[$name]['DATABASE_URL'] = $this->previousUrl[$index];
-        }
-        putenv($this->previousUrl[2] === false ? 'DATABASE_URL' : 'DATABASE_URL='.$this->previousUrl[2]);
-    }
-
     private function collection(array $query = []): array
     {
         $this->client->request('GET', '/api/earthquakes?'.http_build_query($query), server: ['HTTP_ACCEPT' => 'application/ld+json']);
         self::assertResponseIsSuccessful();
+
         return json_decode($this->client->getResponse()->getContent(), true, flags: JSON_THROW_ON_ERROR);
     }
 
@@ -53,6 +40,7 @@ final class EarthquakeControllerTest extends WebTestCase
     {
         $data = $this->collection();
         self::assertSame(3, $data['totalItems']);
+        self::assertStringContainsString('max-age=60', $this->client->getResponse()->headers->get('Cache-Control'));
         self::assertSame(['test-3', 'test-2', 'test-1'], array_column($data['member'], 'usgsId'));
         self::assertEquals(49, $data['member'][0]['latitude']);
         self::assertEquals(-123, $data['member'][0]['longitude']);
@@ -103,5 +91,67 @@ final class EarthquakeControllerTest extends WebTestCase
         self::assertResponseIsSuccessful();
         $this->client->request('POST', '/api/earthquakes', server: ['CONTENT_TYPE' => 'application/ld+json'], content: '{}');
         self::assertResponseStatusCodeSame(405);
+    }
+
+    public function testMapFiltersCoordinatesAndConditionalCaching(): void
+    {
+        $url = '/api/earthquakes/map?'.http_build_query(['magnitude' => ['gte' => 3], 'south' => 48, 'north' => 50]);
+        $this->client->request('GET', $url);
+        self::assertResponseIsSuccessful();
+        $response = $this->client->getResponse();
+        $data = json_decode($response->getContent(), true, flags: JSON_THROW_ON_ERROR);
+        self::assertSame('FeatureCollection', $data['type']);
+        self::assertSame(2, $data['totalItems']);
+        self::assertFalse($data['truncated']);
+        self::assertSame('test-3', $data['features'][0]['id']);
+        self::assertEquals([-123, 49, 20], $data['features'][0]['geometry']['coordinates']);
+        self::assertStringContainsString('public', $response->headers->get('Cache-Control'));
+        $this->client->request('GET', $url, server: ['HTTP_IF_NONE_MATCH' => $response->getEtag()]);
+        self::assertResponseStatusCodeSame(304);
+    }
+
+    public function testMapRejectsInvalidFilters(): void
+    {
+        foreach (['magnitude[gte]=oops', 'occurredAt[after]=yesterday', 'south=80&north=20', 'north=100', 'occurredAt[after]=2026-02-30T12:00:00Z'] as $query) {
+            $this->client->request('GET', '/api/earthquakes/map?'.$query);
+            self::assertGreaterThanOrEqual(400, $this->client->getResponse()->getStatusCode());
+            self::assertLessThan(500, $this->client->getResponse()->getStatusCode());
+        }
+    }
+
+    public function testMapExcludesResultsOutsideBoundingBox(): void
+    {
+        $this->client->request('GET', '/api/earthquakes/map?south=0&north=1');
+        self::assertResponseIsSuccessful();
+        self::assertSame([], json_decode($this->client->getResponse()->getContent(), true)['features']);
+    }
+
+    public function testMapUsesUtcDatesAndPreservesUnknownMagnitudes(): void
+    {
+        $db = static::getContainer()->get(\Doctrine\DBAL\Connection::class);
+        $db->executeStatement("UPDATE earthquake SET magnitude = NULL WHERE usgs_id = 'test-2'");
+        $query = ['occurredAt' => ['after' => '2026-09-02T05:00:00-07:00', 'before' => '2026-09-02T12:00:00Z']];
+        $this->client->request('GET', '/api/earthquakes/map?'.http_build_query($query));
+        self::assertResponseIsSuccessful();
+        $data = json_decode($this->client->getResponse()->getContent(), true, flags: JSON_THROW_ON_ERROR);
+        self::assertSame(1, $data['totalItems']);
+        self::assertNull($data['features'][0]['properties']['magnitude']);
+        self::assertSame('2026-09-02T12:00:00+00:00', $data['features'][0]['properties']['occurredAt']);
+        self::assertNull($this->collection()['member'][1]['magnitude']);
+    }
+
+    public function testMapCapReportsTotalWithoutSilentlyLosingResults(): void
+    {
+        $db = static::getContainer()->get(\Doctrine\DBAL\Connection::class);
+        if ($db->getDatabasePlatform() instanceof \Doctrine\DBAL\Platforms\SQLitePlatform) {
+            self::markTestSkipped('Large catalogue cap is exercised on PostgreSQL in CI.');
+        }
+        $db->executeStatement("INSERT INTO earthquake (usgs_id, magnitude, place, occurred_at, longitude, latitude, depth) SELECT 'cap-' || n, 3, 'Test', '2026-09-02 12:00:00', -123, 49, 10 FROM generate_series(1, 50001) n");
+        $this->client->request('GET', '/api/earthquakes/map');
+        self::assertResponseIsSuccessful();
+        $data = json_decode($this->client->getResponse()->getContent(), true, flags: JSON_THROW_ON_ERROR);
+        self::assertTrue($data['truncated']);
+        self::assertSame(50004, $data['totalItems']);
+        self::assertCount(50000, $data['features']);
     }
 }

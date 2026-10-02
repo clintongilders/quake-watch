@@ -1,0 +1,71 @@
+name: CI
+on: [push, pull_request]
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: quakewatch
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: quakewatch_test
+        ports: ['5432:5432']
+        options: --health-cmd "pg_isready -U quakewatch -d quakewatch_test" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      APP_ENV: test
+      APP_SECRET: ci-only
+      TEST_DATABASE_URL: postgresql://quakewatch:test@127.0.0.1:5432/quakewatch_test?serverVersion=16
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: pdo_pgsql, pdo_sqlite, intl, mbstring
+          coverage: xdebug
+      - run: composer install --prefer-dist --no-interaction
+      - run: php bin/console doctrine:migrations:migrate --no-interaction
+      - run: php bin/console doctrine:schema:validate
+      - run: XDEBUG_MODE=coverage php vendor/bin/phpunit --coverage-clover var/coverage.xml
+      - run: composer analyse
+      - run: composer format:check
+      - run: APP_ENV=prod APP_DEBUG=0 php bin/console lint:container
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run format:check
+      - run: npm run test:coverage
+      - run: npm run build
+  containers:
+    runs-on: ubuntu-latest
+    env:
+      APP_SECRET: ci-container-check-only
+      POSTGRES_PASSWORD: ci-container-check-only
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker compose build
+      - run: docker compose up -d --wait database backend
+      - run: docker compose exec -T backend php bin/console doctrine:migrations:migrate --no-interaction
+      - run: docker compose exec -T backend php bin/console doctrine:schema:validate
+      - run: docker compose up -d --wait frontend
+      - name: Verify nginx and API routes
+        run: |
+          curl --fail --retry 5 --retry-delay 2 --retry-connrefused http://localhost:8080/ > /dev/null
+          curl --fail http://localhost:8080/api/earthquakes | jq -e '.totalItems == 0 and (.member | length == 0)'
+          curl --fail http://localhost:8080/api/earthquakes/map | jq -e '.type == "FeatureCollection" and .totalItems == 0'
+      - if: always()
+        run: docker compose down --volumes

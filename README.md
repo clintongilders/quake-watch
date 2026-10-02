@@ -1,67 +1,32 @@
-# Quake Watch
+# QuakeWatch
 
-Quake Watch is an earthquake explorer built with React, TypeScript, and a Symfony API. It imports recent and historical USGS earthquake records into PostgreSQL and displays them on an interactive map and in a paginated table.
+An earthquake explorer built with React 19, TypeScript, Symfony 8.1, API Platform 5, Doctrine, and PostgreSQL. Imports USGS observations into a local catalogue and displays them on a map and a sortable table.
 
 ## Features
 
-- View earthquake magnitude, location, occurrence time, and depth in kilometres.
-- Filter by minimum magnitude: All, 2+, 3+, 4+, or 5+.
-- Navigate results with Previous and Next controls.
-- Sort all filtered results by magnitude, time, or depth using the table headers.
-- Select a table row to highlight its earthquake on the map and open its details.
-- Explore all filtered results on an interactive map, with magnitude-sized markers, depth colours, and USGS detail links.
-- Choose the last 24 hours, 7 days, 30 days, or a custom UTC date/time range.
-- Apply or reset filters and enable automatic refresh.
-- Browse records newest first, with times displayed in the browser's local timezone.
-- See loading, error, and empty-result states.
+- Last 24 hours by default; 7 days, 30 days, or inclusive custom UTC timestamps.
+- Apply/reset minimum-magnitude filters; unknown magnitudes are shown as **Unknown**, rather than zero.
+- Sort the complete filtered dataset by magnitude, time, or depth. Table pagination is independent of the map.
+- Select a table row or its keyboard-accessible location button to highlight the quake and open map details.
+- One GeoJSON request for map results, with clustering above 2,000 events. Map refresh preserves pan, zoom, selection, and canvas height.
+- Resize the map by dragging or using the handle's Up/Down, Home, and End keys (240–1,000 pixels).
+- Share or bookmark filters, sorting, page size, and page via the URL.
+- Automatic refresh every minute after current requests finish, with cancellation, caching, retry, and manual refresh.
 
-The API also exposes coordinates and supports magnitude, depth, date, and sorting filters. Run the import watcher for automatic USGS updates every five minutes. Browser auto-refresh runs one minute after map loading finishes; you can turn it off or refresh manually.
+Data reflects completed imports, not a live stream. Changing browser filters does not import missing history. Table and popup times use your browser's timezone; custom filter values and stored timestamps are UTC.
 
-## Project structure
+## Development setup
 
-```text
-backend/
-  src/Command/ImportEarthquakesCommand.php  USGS importer
-  src/Entity/Earthquake.php                Database model and API resource
-  src/Repository/EarthquakeRepository.php  Doctrine repository
-  migrations/                             PostgreSQL schema migrations
-  config/packages/                        Database, API, and CORS configuration
-  compose.yaml                            PostgreSQL container
-frontend/
-  src/App.tsx                             Application shell
-  src/components/EarthquakeList.tsx        Filters, sorting, selection, and pagination
-  src/components/EarthquakeMap.tsx         Leaflet map, markers, and selected-quake popup
-  vite.config.ts                          Vite development configuration
-```
-
-The backend uses Symfony 8.1, API Platform 5, and Doctrine ORM. The frontend uses React 19, TypeScript 6, Vite 8, Leaflet 1.9, and Oxlint.
-
-## Requirements
-
-- PHP compatible with the locked dependencies, including PDO PostgreSQL support. `composer.json` requires PHP 8.4 or newer; some locked packages require at least 8.4.1.
-- Composer.
-- Node.js 22.12 or newer and npm. Vite also supports Node 20.19 or newer in the Node 20 release line.
-- PostgreSQL 16, either installed locally or started with Docker Compose.
-- Symfony CLI for the local HTTPS API server.
-- Internet access when importing USGS records.
-
-## Setup
-
-Clone the repository and install dependencies:
+Requirements: PHP 8.4.1+, Composer, Node 24, npm, PostgreSQL 16, and Symfony CLI. PHP needs PDO PostgreSQL, intl, mbstring, and a 256 MB memory limit for large map responses; local SQLite tests also need PDO SQLite. Imports and map tiles require internet access.
 
 ```sh
 git clone git@github.com:clintongilders/quake-watch.git
-cd quake-watch
-cd backend
+cd quake-watch/backend
 composer install
 composer check-platform-reqs
 ```
 
-The following backend commands run from `backend/`.
-
-### Configure the database
-
-Create `backend/.env.local` with your local settings. Keep secrets out of the committed `.env` file.
+Create `backend/.env.local` (ignored by Git):
 
 ```dotenv
 APP_ENV=dev
@@ -69,189 +34,119 @@ APP_SECRET=replace_with_a_random_secret
 DATABASE_URL="postgresql://app:your_password@127.0.0.1:5432/app?serverVersion=16&charset=utf8"
 ```
 
-Generate a secret with:
+Generate the secret with `openssl rand -hex 32`. URL-encode database passwords. Committed environment files contain defaults only; set real secrets locally or through production environment variables.
 
-```sh
-php -r 'echo bin2hex(random_bytes(32)), PHP_EOL;'
-```
-
-Use the actual database username, password, port, and PostgreSQL version in `DATABASE_URL`. URL-encode special characters in database credentials.
-
-For an existing local PostgreSQL server, create the database if needed:
-
-```sh
-php bin/console doctrine:database:create --if-not-exists
-```
-
-Alternatively, start the included PostgreSQL container:
+With an existing PostgreSQL server, run `php bin/console doctrine:database:create --if-not-exists`. Alternatively, from **backend/** use the development database Compose file:
 
 ```sh
 docker compose up -d database
 docker compose port database 5432
 ```
 
-The Compose defaults are database `app`, user `app`, and password `!ChangeMe!`. The override file publishes PostgreSQL on a dynamically assigned host port. Use the port reported by `docker compose port` in `DATABASE_URL`. The container creates its database automatically. These credentials are local development defaults.
+That development container uses database/user `app`, password `!ChangeMe!`, and a dynamically published port. Put the reported port in `DATABASE_URL`. The root Compose file is a separate production-style application stack.
 
-Apply the migrations and import initial data:
+From **backend/**:
 
 ```sh
 php bin/console doctrine:migrations:migrate --no-interaction
 php bin/console app:import-earthquakes
-```
-
-### Start the backend
-
-Install and trust Symfony's local certificate authority once:
-
-```sh
 symfony server:ca:install
-```
-
-Start the API:
-
-```sh
 symfony serve -d --port=8000
 ```
 
-Check [https://127.0.0.1:8000/api/earthquakes](https://127.0.0.1:8000/api/earthquakes) in your browser. The frontend currently uses this exact HTTPS endpoint. Resolve any certificate trust errors before starting the frontend.
-
-Stop the backend with:
+From **frontend/** in another terminal:
 
 ```sh
-symfony server:stop
-```
-
-### Start the frontend
-
-In a separate terminal, from the repository root:
-
-```sh
-cd frontend
 npm ci
 npm run dev -- --port 5173 --strictPort
 ```
 
-Open [http://localhost:5173](http://localhost:5173). Keep this hostname and port: the backend's current CORS configuration explicitly allows this origin. `--strictPort` prevents Vite from silently choosing another port when 5173 is occupied.
+Open [localhost:5173](http://localhost:5173). Vite proxies `/api` to the local Symfony HTTPS server; `secure: false` is limited to this development proxy. Browser requests are same-origin and need no CORS configuration. Stop Symfony with `symfony server:stop`.
 
-The frontend calls the backend directly; there is no Vite API proxy or environment-based API URL configured.
+`frontend/.env.example` documents optional **build-time, public** settings:
 
-## Importing earthquake data
+- `VITE_API_URL`: backend origin for a separately hosted API. Empty uses same-origin `/api`.
+- `VITE_TILE_URL` and `VITE_TILE_ATTRIBUTION`: raster provider URL and required attribution. Never put private credentials in Vite variables.
 
-From `backend/`, run:
+For direct cross-origin hosting, set backend `CORS_ALLOW_ORIGIN` to an anchored regex for your frontend origin, for example `^https://quakes\.example\.com$`. This environment variable is wired into Nelmio CORS.
 
-```sh
-php bin/console app:import-earthquakes
-```
+## Importing and scheduling
 
-The importer reads the USGS `all_day.geojson` feed, inserts new USGS IDs, updates existing records with revised values, and prints counts and a completion timestamp. A unique database index protects the USGS ID.
-
-Imports retain older stored records; they do not remove records that have aged out of the past-day feed.
-
-For automatic updates, run this in another backend terminal:
+Run from **backend/**:
 
 ```sh
-php bin/console app:import-earthquakes --watch
-```
-
-It imports immediately, then repeats five minutes after each run. Keep the process running; Ctrl+C stops it. Failed imports are reported and retried on the next cycle. Symfony Lock prevents overlapping imports on this machine (`LOCK_DSN=flock`). For multiple hosts, configure a shared lock store. Production can run the watcher under a process supervisor or schedule the one-shot command.
-
-### Historical imports
-
-Import an inclusive range of UTC calendar days from the USGS earthquake catalogue:
-
-```sh
+XDEBUG_MODE=off php bin/console app:import-earthquakes --no-debug
 XDEBUG_MODE=off php bin/console app:import-earthquakes --no-debug --from=2026-09-01 --to=2026-09-30
 ```
 
-Run this from `backend/`. `XDEBUG_MODE=off` suppresses Xdebug connection messages; `--no-debug` avoids development tracing overhead during backfills. Both dates are required in `YYYY-MM-DD` format. The command validates the range, requests each day in pages of up to 1,000 events, and inserts new USGS IDs or refreshes existing records. Historical mode cannot be combined with `--watch`; the watcher continues to use the past-day feed.
+Historical dates are required together, validated, and inclusive UTC calendar days. The catalogue is requested in pages of 1,000. Live imports normally use USGS's past-day feed; both paths accept only `type=earthquake`. Missing magnitudes remain null. Invalid features are skipped and counted. Records are saved in atomic batches of 100 using PostgreSQL `ON CONFLICT`, so rerunning an interrupted range updates existing USGS IDs rather than duplicating them. SQL profiling is disabled in Doctrine configuration, avoiding development query-history retention.
 
-Progress is saved in batches of 100 records; ORM entities and debug query history are cleared after each batch. If an import fails, rerun the same command: existing records are refreshed rather than duplicated. Large ranges can take time and perform many API requests. The same import lock prevents overlap with the watcher; stop the watcher before a backfill if it holds the lock. The date filter in the browser queries stored records and does not initiate imports itself.
+A successful live import stores its **start time** in `import_checkpoint`. If the next run is more than a day later, it backfills the gap with an overlapping UTC day before fetching the live feed. Failed runs do not advance the checkpoint. Historical imports do not advance it either. The first run has no checkpoint and imports the past day; import any older desired range explicitly.
 
-Catalogue documentation: [USGS earthquake web service](https://earthquake.usgs.gov/fdsnws/event/1/).
+`--watch` has been removed. Schedule a fresh PHP process every five minutes, so failure in one run cannot poison the next. For example, add a cron entry with the actual project and PHP paths:
 
-## Using the explorer
+```cron
+*/5 * * * * cd /absolute/path/quake-watch/backend && APP_ENV=prod APP_DEBUG=0 /usr/bin/php bin/console app:import-earthquakes --no-interaction >> var/log/import.log 2>&1
+```
 
-### Filters and refresh
+Ensure the scheduled process receives `DATABASE_URL` and `APP_SECRET`; do not put secrets into a committed crontab. Rotate the log. A lock prevents overlapping imports; a busy run skips successfully. `LOCK_DSN=flock` works on one host. The application Compose stack shares `flock:///app/var/locks` between containers. Multiple hosts require a shared Symfony-supported lock store.
 
-The initial view covers the **last 24 hours**, with all magnitudes included. Choose **7 days**, **30 days**, or **Custom** for a different range. Custom From and Through values are inclusive UTC timestamps; table and popup times are displayed in your browser's local timezone.
+**Existing data:** the migration does not guess which old zeros meant unknown, or which historical timestamps used a non-UTC PHP timezone. Reimport the affected historical range to refresh those values from USGS. It also cannot identify older non-earthquake records whose source type was never stored; reconcile those against USGS before deleting them. Records are not deleted merely because they age out of the live feed.
 
-Edit the range or minimum magnitude, then select **Apply**. Unapplied edits do not affect displayed results or automatic refresh. **Reset** restores all magnitudes and the last 24 hours and returns the table to page 1. Rolling ranges advance when filters are applied or results are refreshed; changing table pages keeps the same time boundaries.
-
-**Auto-refresh** is enabled by default. It waits until map loading finishes, then refreshes one minute later. **Refresh** reloads the applied filters manually. The **Updated** time is the last successful table API fetch, not the last USGS import or map-loading completion.
-
-### Map
-
-The map loads **all earthquakes matching the applied filters**, independently of the table's page and page size. It follows API pages in batches of 100, displays loading progress, and cancels unfinished requests when filters change. Large historical ranges can take longer to load. A failed map request shows an error; use **Refresh** to retry.
-
-Marker size represents magnitude. Depth colours distinguish shallow events (under 70 km), intermediate events (70–300 km), and deep events (300 km or more). Select a marker to open its details and USGS link. Map tiles require internet access and are attributed to OpenStreetMap.
-
-Drag the handle below the map to adjust its height between 240 and 1,000 pixels. You can also focus the handle and use Up/Down arrows; Home and End select the minimum and maximum heights. The map redraws automatically as its size changes.
-
-On mobile, switch between **Map** and **Table**; desktop shows both.
-
-### Table, sorting, and selection
-
-The toolbar **above the table** contains the visible result range (for example, `1–30 of 187 earthquakes`), **Per page**, and **Page X of Y** navigation. Result-range and pagination controls also appear below the table. Page sizes are 10, 30 (default), 50, and 100; changing the size returns to page 1 and does not change the map's results.
-
-Select the **Magnitude**, **Time**, or **Depth** header to sort the entire filtered dataset, rather than just the visible page. New sort columns start descending; selecting the active header again switches direction. Arrows indicate the current direction and remain beside the header label. Sorting returns to page 1; the initial order is newest first.
-
-Select a row to highlight it and its map marker, centre the map on the earthquake, and open its popup. The location button provides keyboard access to the same action. On mobile, selecting a row switches to the map. Applying filters clears the selection.
+USGS catalogue documentation: [earthquake web service](https://earthquake.usgs.gov/fdsnws/event/1/).
 
 ## API
 
-Earthquake resources expose read-only collection and item operations:
-
-| Endpoint | Purpose |
+| Endpoint | Response |
 | --- | --- |
-| `GET /api/earthquakes` | Paginated earthquake collection, newest first by default. |
-| `GET /api/earthquakes/{id}` | One earthquake by its database ID. |
+| `GET /api/earthquakes` | Read-only paginated JSON-LD collection: `member`, `totalItems`, `view`. |
+| `GET /api/earthquakes/{id}` | One record by database ID. |
+| `GET /api/earthquakes/map` | GeoJSON FeatureCollection with `totalItems` and `truncated`. |
 
-The collection includes `member`, `totalItems`, and pagination information under `view`. The frontend uses `view.next` to enable the Next button and load subsequent map pages, and `view.last` to determine the table page count. `itemsPerPage` defaults to 30 and is capped at 100.
+Collection fields: `id`, `usgsId`, nullable `magnitude`, `place`, `occurredAt`, `latitude`, `longitude`, `depth`. Table page size defaults to 30, capped at 100. Filters include `magnitude[gte]`, depth comparisons, and `occurredAt[after]`/`[before]`. Sort parameters `sortMagnitude`, `sortOccurredAt`, and `sortDepth` accept `asc` or `desc`.
 
-Example requests:
+The map accepts `magnitude[gte]`, inclusive ISO-8601 `occurredAt[after]`/`[before]` with timezones, and optional `south`, `north`, `west`, `east` bounds. Split bounding boxes crossing the antimeridian. Feature coordinates are `[longitude, latitude, depth]`; properties are magnitude, place, and UTC occurredAt. It returns up to **50,000** events, with a visible warning to narrow filters if the results are capped. This bound protects server/browser memory; the table can still paginate all matching records. Ordinary 24-hour and 30-day views load the full map dataset in one request.
+
+Map responses use a 60-second server cache, public HTTP caching, and ETags/conditional requests. API Platform collection/item responses have 60-second cache headers. PostgreSQL indexes cover occurrence time plus magnitude, magnitude, and depth. The frontend validates API responses with Zod rather than trusting handwritten casts.
 
 ```sh
-curl 'https://127.0.0.1:8000/api/earthquakes?page=1'
-curl 'https://127.0.0.1:8000/api/earthquakes?magnitude%5Bgte%5D=3&page=1'
-curl 'https://127.0.0.1:8000/api/earthquakes?sortDepth=asc&itemsPerPage=100'
-curl 'https://127.0.0.1:8000/api/earthquakes?occurredAt%5Bafter%5D=2026-09-01T00:00:00Z&occurredAt%5Bbefore%5D=2026-09-30T23:59:59Z'
+curl 'https://127.0.0.1:8000/api/earthquakes?magnitude%5Bgte%5D=3&sortDepth=asc'
+curl 'https://127.0.0.1:8000/api/earthquakes/map?south=40&north=60&west=-130&east=-110'
 ```
 
-The second request selects earthquakes with magnitude greater than or equal to 3. The entity also configures comparison filters for depth, a date filter for `occurredAt`, and sorting parameters named `sortOccurredAt`, `sortMagnitude`, and `sortDepth`, each accepting `asc` or `desc`.
+## Tests and tooling
 
-Each record contains `id`, `usgsId`, `magnitude`, `place`, `occurredAt`, `latitude`, `longitude`, and `depth`.
+From **frontend/**:
 
-## Development commands
+```sh
+npm test
+npm run test:coverage
+npm run lint
+npm run format:check
+npm run build
+```
 
-Run frontend commands from `frontend/`:
+`npm run test:watch` watches tests; `npm run format` formats source. Vitest/Testing Library tests cover filters, URL restoration, sorting/pagination, null magnitudes, API validation, cancellation, refresh, selection, clustering, popup safety, bounds, and resizing. Leaflet calls are mocked; browser rendering and real tiles still need manual checks. Coverage includes components, query hooks, and API code, with thresholds of 85% lines, 80% statements, and 70% branches/functions. Report: `frontend/coverage/index.html`.
 
-| Command | Purpose |
-| --- | --- |
-| `npm run dev` | Start Vite's development server. |
-| `npm run build` | Type-check and generate the production frontend in `dist/`. |
-| `npm run lint` | Run Oxlint. |
-| `npm test` | Run frontend component tests once. |
-| `npm run test:watch` | Run frontend tests during development. |
-| `npm run test:coverage` | Measure component coverage and write `frontend/coverage/index.html`. |
-| `npm run preview` | Preview the built frontend locally. |
+From **backend/**:
 
-Run backend commands from `backend/`:
+```sh
+XDEBUG_MODE=off composer test
+XDEBUG_MODE=off composer analyse
+XDEBUG_MODE=off composer format:check
+XDEBUG_MODE=coverage php vendor/bin/phpunit --coverage-html var/coverage
+APP_ENV=prod APP_DEBUG=0 php bin/console lint:container
+```
 
-| Command | Purpose |
-| --- | --- |
-| `php bin/console app:import-earthquakes` | Import new USGS records. |
-| `php bin/console doctrine:migrations:migrate` | Apply database migrations. |
-| `php bin/console debug:router` | Inspect registered API routes. |
-| `php bin/console lint:container` | Validate dependency injection configuration. |
-| `php bin/console lint:yaml config/` | Validate YAML configuration. |
-| `XDEBUG_MODE=off php vendor/bin/phpunit` | Run backend unit and API integration tests. |
-| `XDEBUG_MODE=coverage php vendor/bin/phpunit --coverage-text --coverage-html var/coverage` | Measure backend coverage with Xdebug; report at `backend/var/coverage/index.html`. |
+`composer format` applies Symfony formatting. PHPStan uses Symfony/Doctrine extensions. Database configuration comes from `TEST_DATABASE_URL` in the test environment, never hand-mutated environment globals. The local default is in-memory SQLite; the real database constraint-recovery test is skipped there. To run **all** tests against PostgreSQL, create a disposable database whose name ends in `_test`:
 
-Backend tests cover importer updates, historical pagination, validation, lock contention, HTTP/database failure cleanup, and retry after a failed request. API integration tests exercise the actual `/api/earthquakes` routes, combined filters, both directions of each sort, pagination links, item access, and read-only behavior. They build a fresh **in-memory SQLite database** per test and do not touch development records; PHP needs `pdo_sqlite`.
+```sh
+TEST_DATABASE_URL='postgresql://user:password@127.0.0.1:5432/quakewatch_test?serverVersion=16' XDEBUG_MODE=off composer test
+```
 
-Frontend tests use Vitest, Testing Library, and jsdom. They cover date defaults and validation, applying/resetting filters, table sorting and pagination, loading every map page, deduplication, errors, request cancellation, refresh behavior, map selection, map bounds, and resizing. Leaflet is mocked to check calls and popup construction; browser rendering and real tile loading still need manual checks. Coverage includes `src/components/**/*.tsx`, with minimum thresholds of 85% lines, 80% statements, and 70% branches/functions. Coverage reports are ignored by Git.
+Tests recreate their mapped tables and clear the application cache. Never point them at development or production data. PostgreSQL test databases must end in `_test`; SQLite must be in-memory. USGS HTTP responses are fixtures, while import writes, rollback, checkpoint recovery, API filtering, and sorting use the actual database. Coverage report: `backend/var/coverage/index.html`.
 
-Line coverage measures executed code, not every possible scenario. The importer's continuous watch loop is not exercised end to end, and these tests do not depend on live USGS services.
+GitHub Actions runs migrations and schema validation, PostgreSQL 16 integration tests, PHPStan, format checks, production container validation, frontend checks, coverage thresholds, both Docker image builds, and HTTP smoke tests through nginx. CI executes when these changes are pushed; a local pass does not claim a remote CI pass.
 
 ## PHP step debugging in VS Code
 
@@ -259,43 +154,63 @@ The local `development` VS Code workspace has debug configurations in its `.vsco
 
 ### Debug API requests
 
-1. Set a breakpoint in `backend/public/index.php` on the `require_once` line. API Platform handles the earthquake routes; the empty `EarthquakeController` is not called for these requests.
+1. Set a breakpoint in `backend/public/index.php` on the `require_once` line. API Platform handles collection/item routes; `EarthquakeMapController` handles the GeoJSON map endpoint.
 2. In **Run and Debug**, choose **QuakeWatch: Listen for Xdebug**, then press **F5**.
 3. Request `https://127.0.0.1:8000/api/earthquakes` or refresh the frontend. The local PHP configuration currently starts debugging on every request, so the frontend's multiple API requests can create several debug sessions. Turn off Auto-refresh while debugging.
 4. Use **F10** to step over, **F11** to step into, **Shift+F11** to step out, and **F5** to continue.
 
 ### Debug the importer
 
-Set a breakpoint inside `ImportEarthquakesCommand::execute()` or `import()`, choose **QuakeWatch: Debug earthquake import**, and press **F5**. This launches the one-shot recent import and pauses at entry; continuing runs the import against the configured database. Edit the launch configuration's `args` to debug a historical range.
+Set a breakpoint inside `ImportEarthquakesCommand::execute()` or `EarthquakeWriter::write()`, choose **QuakeWatch: Debug earthquake import**, and press **F5**. This launches the one-shot recent import and pauses at entry; continuing runs the import against the configured database. Edit the launch configuration's `args` to debug a historical range.
 
 Do not use `XDEBUG_MODE=off` for a debugging session. The CLI launch configuration explicitly enables Xdebug. A “Could not connect to debugging client” message means Xdebug tried to contact the editor but no matching listener was available. Start the listener before issuing the request, and ensure port 9003 is available. Local PHP source paths match editor paths, so no path mapping is required.
 
 To debug only selected requests instead of every request, change your PHP configuration to `xdebug.start_with_request=trigger`, restart the Symfony server, and use `XDEBUG_TRIGGER=1` for CLI commands or `?XDEBUG_TRIGGER=1` on API URLs. This is an optional machine-level setting; the project does not change it automatically.
 
-## Configuration and deployment notes
+## Production containers
 
-| Setting | Location and behaviour |
-| --- | --- |
-| Database and app secrets | `backend/.env.local` locally; environment variables or Symfony secrets for production. |
-| API URL | Hardcoded in `frontend/src/components/EarthquakeList.tsx` as `https://127.0.0.1:8000/api/earthquakes`. |
-| CORS | `backend/config/packages/nelmio_cors.yaml` allows `http://localhost:5173` for API GET and OPTIONS requests. |
-| Import sources | USGS past-day feed and historical catalogue query endpoint in `ImportEarthquakesCommand.php`. |
-| Import lock | `LOCK_DSN=flock` by default; configure a shared store for multiple hosts. |
+The root `compose.yaml` runs PostgreSQL 16, a PHP-FPM backend, nginx with the built frontend and same-origin API routing, and an importer that launches a **fresh process** each cycle.
 
-Although `.env` defines `CORS_ALLOW_ORIGIN`, the current CORS YAML uses a literal origin; changing that environment variable alone does not change the allowed frontend origin.
+Export secrets before running (do not commit them):
 
-For deployment, replace the frontend's local API URL with the deployed endpoint, configure CORS for the deployed frontend origin, build the frontend, and serve the Symfony application through its `backend/public/` document root. Configure production secrets and PostgreSQL, apply migrations, and run the watcher or arrange recurring imports if you need ongoing updates. This repository currently has no application deployment configuration; the import watcher must be started or supervised separately.
+```sh
+export APP_SECRET="$(openssl rand -hex 32)"
+export POSTGRES_PASSWORD="$(openssl rand -hex 24)"
+docker compose build
+docker compose up -d database backend
+docker compose exec backend php bin/console doctrine:migrations:migrate --no-interaction
+docker compose up -d frontend importer
+```
+
+Open `http://localhost:8080`. Migration runs are explicit and must precede starting the importer. `APP_ENV=prod` and `APP_DEBUG=0` are set by the stack. Persistent PostgreSQL and backend cache/lock volumes survive container restarts. Do not run `docker compose down -v` against data you want to keep.
+
+For public hosting, terminate HTTPS at a reverse proxy, provision backups, supply secrets through the hosting environment, and choose tile service settings appropriate to your traffic. `VITE_TILE_URL`/`VITE_TILE_ATTRIBUTION` are frontend build arguments in Compose; changing them requires a rebuild. Same-origin hosting needs no cross-origin configuration. Separate API hosting also needs `VITE_API_URL` at build time and a restrictive `CORS_ALLOW_ORIGIN` on the backend.
+
+OpenStreetMap's public tiles permit ordinary interactive use under their [tile usage policy](https://operations.osmfoundation.org/policies/tiles/), including attribution, normal browser caching, and a valid Referer. They provide no SLA and prohibit bulk/offline downloading. Use a suitable alternative when your deployment needs guaranteed capacity; this app allows switching providers.
+
+## Project structure
+
+```text
+backend/src/Command/ImportEarthquakesCommand.php  Validates/fetches USGS records
+backend/src/Service/EarthquakeWriter.php         Atomic batch upserts and checkpoints
+backend/src/Controller/EarthquakeMapController.php  Cached slim map endpoint
+backend/src/Dto/MapFilters.php                   Validated map request parameters
+backend/src/Entity/                              Read-only API model and checkpoint
+backend/migrations/                             PostgreSQL schema evolution
+frontend/src/hooks/useEarthquakes.ts             Reducer, URL state and query lifecycle
+frontend/src/lib/api.ts                          URLs, contracts and response validation
+frontend/src/components/                        Explorer UI and clustered Leaflet map
+.github/workflows/ci.yml                        Automated checks and image builds
+compose.yaml                                    Full application stack
+```
 
 ## Troubleshooting
 
-- **Empty results:** run migrations and `app:import-earthquakes`, then try the All magnitude filter.
-- **Database connection fails:** verify PostgreSQL is running and that `DATABASE_URL` matches its credentials and published port. For Docker, use `docker compose port database 5432`.
-- **Browser reports “Failed to fetch”:** open the HTTPS API URL directly to check certificate trust and server availability. Confirm the frontend is at `http://localhost:5173`.
-- **CORS errors:** check the allowed origin in `nelmio_cors.yaml`. `localhost` and `127.0.0.1` are different browser origins.
-- **Port already in use:** stop the existing server or deliberately update both the frontend endpoint and CORS settings to match any new addresses.
-- **Backend errors:** inspect `backend/var/log/dev.log` and registered routes with `php bin/console debug:router`.
-- **Stale results:** rerun the importer and reload the page. Use the import watcher to keep stored records updated.
-
-## Data source
-
-Recent data comes from the [USGS past-day GeoJSON feed](https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_day.geojson); historical imports use the USGS earthquake catalogue. The map and table reflect stored imports rather than a live stream. Changing browser dates does not automatically import missing history.
+- **Empty results:** apply migrations, import records, and check the UTC range and magnitude filter.
+- **Database unavailable:** verify PostgreSQL and `DATABASE_URL`. The backend development Compose file uses a dynamic host port.
+- **Vite API errors:** verify Symfony is running at the proxy target in `frontend/vite.config.ts`; direct API access may require trusting Symfony's local certificate.
+- **CORS errors with a separate API:** check `CORS_ALLOW_ORIGIN`. Hostnames and ports are part of the origin.
+- **Stale results:** run the importer; browser/API caches may retain data for up to 60 seconds.
+- **Large map range:** narrow filters when the 50,000-event cap is reached; use table pagination for the complete catalogue.
+- **Removed watch option:** use the scheduled one-shot command or the Compose importer.
+- **Old values:** rerun historical import for the affected dates rather than guessing timezone offsets or converting every zero magnitude to null.

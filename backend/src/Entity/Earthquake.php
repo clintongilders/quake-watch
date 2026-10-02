@@ -2,16 +2,16 @@
 
 namespace App\Entity;
 
-use App\Repository\EarthquakeRepository;
-use Doctrine\ORM\Mapping as ORM;
-use ApiPlatform\Metadata\ApiResource;
-use ApiPlatform\Metadata\Get;
-use ApiPlatform\Metadata\GetCollection;
 use ApiPlatform\Doctrine\Orm\Filter\ComparisonFilter;
 use ApiPlatform\Doctrine\Orm\Filter\DateFilter;
 use ApiPlatform\Doctrine\Orm\Filter\ExactFilter;
 use ApiPlatform\Doctrine\Orm\Filter\SortFilter;
+use ApiPlatform\Metadata\ApiResource;
+use ApiPlatform\Metadata\Get;
+use ApiPlatform\Metadata\GetCollection;
 use ApiPlatform\Metadata\QueryParameter;
+use App\Repository\EarthquakeRepository;
+use Doctrine\ORM\Mapping as ORM;
 
 #[ApiResource(
     operations: [
@@ -48,6 +48,9 @@ use ApiPlatform\Metadata\QueryParameter;
         ),
     ],
 )]
+#[ORM\Index(name: 'earthquake_time_magnitude_idx', columns: ['occurred_at', 'magnitude'])]
+#[ORM\Index(name: 'earthquake_magnitude_idx', columns: ['magnitude'])]
+#[ORM\Index(name: 'earthquake_depth_idx', columns: ['depth'])]
 #[ORM\Entity(repositoryClass: EarthquakeRepository::class)]
 class Earthquake
 {
@@ -57,32 +60,32 @@ class Earthquake
     private ?int $id = null;
 
     #[ORM\Column(length: 255, unique: true)]
-    private ?string $usgsId = null;
+    private string $usgsId;
 
-    #[ORM\Column]
+    #[ORM\Column(nullable: true)]
     private ?float $magnitude = null;
 
     #[ORM\Column(length: 255)]
-    private ?string $place = null;
+    private string $place;
 
     #[ORM\Column]
-    private ?\DateTimeImmutable $occurredAt = null;
+    private \DateTimeImmutable $occurredAt;
 
     #[ORM\Column]
-    private ?float $latitude = null;
+    private float $latitude;
 
     #[ORM\Column]
-    private ?float $longitude = null;
+    private float $longitude;
 
     #[ORM\Column]
-    private ?float $depth = null;
+    private float $depth;
 
     public function getId(): ?int
     {
         return $this->id;
     }
 
-    public function getUsgsId(): ?string
+    public function getUsgsId(): string
     {
         return $this->usgsId;
     }
@@ -99,14 +102,14 @@ class Earthquake
         return $this->magnitude;
     }
 
-    public function setMagnitude(float $magnitude): static
+    public function setMagnitude(?float $magnitude): static
     {
         $this->magnitude = $magnitude;
 
         return $this;
     }
 
-    public function getPlace(): ?string
+    public function getPlace(): string
     {
         return $this->place;
     }
@@ -118,7 +121,7 @@ class Earthquake
         return $this;
     }
 
-    public function getOccurredAt(): ?\DateTimeImmutable
+    public function getOccurredAt(): \DateTimeImmutable
     {
         return $this->occurredAt;
     }
@@ -130,7 +133,7 @@ class Earthquake
         return $this;
     }
 
-    public function getLatitude(): ?float
+    public function getLatitude(): float
     {
         return $this->latitude;
     }
@@ -142,7 +145,7 @@ class Earthquake
         return $this;
     }
 
-    public function getLongitude(): ?float
+    public function getLongitude(): float
     {
         return $this->longitude;
     }
@@ -154,7 +157,7 @@ class Earthquake
         return $this;
     }
 
-    public function getDepth(): ?float
+    public function getDepth(): float
     {
         return $this->depth;
     }
