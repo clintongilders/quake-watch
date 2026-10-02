@@ -98,4 +98,58 @@ final class ImportEarthquakesCommandTest extends KernelTestCase
         }
     }
 
+    public function testBusyLockPreventsRequests(): void
+    {
+        $factory = new LockFactory(new InMemoryStore());
+        $lock = $factory->createLock('earthquake-import', 300);
+        self::assertTrue($lock->acquire());
+        $http = new MockHttpClient(static function (): never { self::fail('A competing import must not fetch data.'); });
+        $manager = $this->createMock(EntityManagerInterface::class);
+        $manager->expects(self::never())->method('persist');
+        $tester = new CommandTester(new ImportEarthquakesCommand($http, $manager, $this->createStub(EarthquakeRepository::class), $factory));
+        try {
+            self::assertSame(1, $tester->execute([]));
+            self::assertStringContainsString('Another import is running', $tester->getDisplay());
+        } finally {
+            $lock->release();
+        }
+    }
+
+    public function testHttpFailureReleasesLockAndAllowsRetry(): void
+    {
+        $attempts = 0;
+        $http = new MockHttpClient(static function () use (&$attempts): MockResponse {
+            return ++$attempts === 1 ? new MockResponse('', ['http_code' => 503]) : new MockResponse('{"features":[]}');
+        });
+        $manager = $this->createMock(EntityManagerInterface::class);
+        $manager->expects(self::exactly(2))->method('clear');
+        $manager->expects(self::never())->method('persist');
+        $manager->expects(self::never())->method('flush');
+        $tester = new CommandTester(new ImportEarthquakesCommand($http, $manager, $this->createStub(EarthquakeRepository::class), new LockFactory(new InMemoryStore())));
+        self::assertSame(1, $tester->execute([]));
+        self::assertStringContainsString('Import failed:', $tester->getDisplay());
+        self::assertSame(0, $tester->execute([]));
+        self::assertSame(2, $attempts);
+    }
+
+    public function testFlushFailureClearsEntitiesAndReleasesLock(): void
+    {
+        $feature = ['id' => 'failed', 'properties' => ['mag' => null, 'place' => null, 'time' => 1760000000000], 'geometry' => ['coordinates' => [-123, 49, 12]]];
+        $http = new MockHttpClient(new MockResponse(json_encode(['features' => [$feature]], JSON_THROW_ON_ERROR)));
+        $manager = $this->createMock(EntityManagerInterface::class);
+        $manager->expects(self::once())->method('persist')->willReturnCallback(static function (Earthquake $quake): void {
+            self::assertSame(0.0, $quake->getMagnitude());
+            self::assertSame('Unknown', $quake->getPlace());
+        });
+        $manager->expects(self::once())->method('flush')->willThrowException(new \RuntimeException('Database unavailable'));
+        $manager->expects(self::once())->method('clear');
+        $factory = new LockFactory(new InMemoryStore());
+        $tester = new CommandTester(new ImportEarthquakesCommand($http, $manager, $this->createStub(EarthquakeRepository::class), $factory));
+        self::assertSame(1, $tester->execute([]));
+        self::assertStringContainsString('Database unavailable', $tester->getDisplay());
+        $lock = $factory->createLock('earthquake-import', 300);
+        self::assertTrue($lock->acquire());
+        $lock->release();
+    }
+
 }

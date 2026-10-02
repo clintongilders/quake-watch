@@ -230,6 +230,9 @@ Run frontend commands from `frontend/`:
 | `npm run dev` | Start Vite's development server. |
 | `npm run build` | Type-check and generate the production frontend in `dist/`. |
 | `npm run lint` | Run Oxlint. |
+| `npm test` | Run frontend component tests once. |
+| `npm run test:watch` | Run frontend tests during development. |
+| `npm run test:coverage` | Measure component coverage and write `frontend/coverage/index.html`. |
 | `npm run preview` | Preview the built frontend locally. |
 
 Run backend commands from `backend/`:
@@ -241,9 +244,33 @@ Run backend commands from `backend/`:
 | `php bin/console debug:router` | Inspect registered API routes. |
 | `php bin/console lint:container` | Validate dependency injection configuration. |
 | `php bin/console lint:yaml config/` | Validate YAML configuration. |
-| `php vendor/bin/phpunit` | Run the existing backend tests. |
+| `XDEBUG_MODE=off php vendor/bin/phpunit` | Run backend unit and API integration tests. |
+| `XDEBUG_MODE=coverage php vendor/bin/phpunit --coverage-text --coverage-html var/coverage` | Measure backend coverage with Xdebug; report at `backend/var/coverage/index.html`. |
 
-Importer coverage is available with `php vendor/bin/phpunit tests/Command`. The existing backend controller test requests `/earthquake`, which is not implemented by the current controller. It needs updating to test the API routes. No frontend test runner is currently configured.
+Backend tests cover importer updates, historical pagination, validation, lock contention, HTTP/database failure cleanup, and retry after a failed request. API integration tests exercise the actual `/api/earthquakes` routes, combined filters, both directions of each sort, pagination links, item access, and read-only behavior. They build a fresh **in-memory SQLite database** per test and do not touch development records; PHP needs `pdo_sqlite`.
+
+Frontend tests use Vitest, Testing Library, and jsdom. They cover date defaults and validation, applying/resetting filters, table sorting and pagination, loading every map page, deduplication, errors, request cancellation, refresh behavior, map selection, map bounds, and resizing. Leaflet is mocked to check calls and popup construction; browser rendering and real tile loading still need manual checks. Coverage includes `src/components/**/*.tsx`, with minimum thresholds of 85% lines, 80% statements, and 70% branches/functions. Coverage reports are ignored by Git.
+
+Line coverage measures executed code, not every possible scenario. The importer's continuous watch loop is not exercised end to end, and these tests do not depend on live USGS services.
+
+## PHP step debugging in VS Code
+
+The local `development` VS Code workspace has debug configurations in its `.vscode/launch.json`. Open `development.code-workspace` to use them. The required extension is **PHP Debug** (`xdebug.php-debug`). PHP CLI and the Symfony PHP-FPM server must both load Xdebug with `xdebug.mode=debug`; Xdebug connects to the editor on port **9003**.
+
+### Debug API requests
+
+1. Set a breakpoint in `backend/public/index.php` on the `require_once` line. API Platform handles the earthquake routes; the empty `EarthquakeController` is not called for these requests.
+2. In **Run and Debug**, choose **QuakeWatch: Listen for Xdebug**, then press **F5**.
+3. Request `https://127.0.0.1:8000/api/earthquakes` or refresh the frontend. The local PHP configuration currently starts debugging on every request, so the frontend's multiple API requests can create several debug sessions. Turn off Auto-refresh while debugging.
+4. Use **F10** to step over, **F11** to step into, **Shift+F11** to step out, and **F5** to continue.
+
+### Debug the importer
+
+Set a breakpoint inside `ImportEarthquakesCommand::execute()` or `import()`, choose **QuakeWatch: Debug earthquake import**, and press **F5**. This launches the one-shot recent import and pauses at entry; continuing runs the import against the configured database. Edit the launch configuration's `args` to debug a historical range.
+
+Do not use `XDEBUG_MODE=off` for a debugging session. The CLI launch configuration explicitly enables Xdebug. A “Could not connect to debugging client” message means Xdebug tried to contact the editor but no matching listener was available. Start the listener before issuing the request, and ensure port 9003 is available. Local PHP source paths match editor paths, so no path mapping is required.
+
+To debug only selected requests instead of every request, change your PHP configuration to `xdebug.start_with_request=trigger`, restart the Symfony server, and use `XDEBUG_TRIGGER=1` for CLI commands or `?XDEBUG_TRIGGER=1` on API URLs. This is an optional machine-level setting; the project does not change it automatically.
 
 ## Configuration and deployment notes
 
