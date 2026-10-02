@@ -31,7 +31,7 @@ use ApiPlatform\Metadata\QueryParameter;
             property: 'depth',
         ),
         'occurredAt' => new QueryParameter(
-            filter: DateFilter::class,
+            filter: new DateFilter(),
             property: 'occurredAt',
         ),
         'sortOccurredAt' => new QueryParameter(
