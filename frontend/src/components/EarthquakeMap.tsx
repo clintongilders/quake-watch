@@ -17,7 +17,9 @@ export default function EarthquakeMap({ earthquakes }: { earthquakes: Earthquake
       maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
     }).addTo(instance);
     map.current = instance;
-    return () => { instance.remove(); map.current = null; };
+    const observer = new ResizeObserver(() => instance.invalidateSize());
+    observer.observe(container.current);
+    return () => { observer.disconnect(); instance.remove(); map.current = null; };
   }, []);
   useEffect(() => {
     if (!map.current) return;

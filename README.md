@@ -151,7 +151,21 @@ php bin/console app:import-earthquakes --watch
 
 It imports immediately, then repeats five minutes after each run. Keep the process running; Ctrl+C stops it. Failed imports are reported and retried on the next cycle. Symfony Lock prevents overlapping imports on this machine (`LOCK_DSN=flock`). For multiple hosts, configure a shared lock store. Production can run the watcher under a process supervisor or schedule the one-shot command.
 
-The browser's “Results fetched” time records its last successful API fetch, not the last USGS import. Date boundaries are inclusive UTC days. The map and table show the same page, not all matching earthquakes. Map tiles require internet access and are attributed to OpenStreetMap.
+The browser's “Results fetched” time records its last successful API fetch, not the last USGS import. Quick ranges cover the last 24 hours (default), 7 days, or 30 days and move forward on refresh. Choose Custom for inclusive UTC From and Through timestamps. Edit the filters, then select Apply filters; Reset restores all magnitudes and the last 24 hours. Auto-refresh uses the applied filters without applying unfinished edits. On mobile, switch between Map and Table; desktop shows both. Pagination displays the visible result range and total pages. The Per page selector offers 10, 30 (default), 50, or 100 results and returns to page 1 when changed. The API accepts `itemsPerPage`, capped at 100. The map and table show the same page, not all matching earthquakes. Map tiles require internet access and are attributed to OpenStreetMap.
+
+### Historical imports
+
+Import an inclusive range of UTC calendar days from the USGS earthquake catalogue:
+
+```sh
+XDEBUG_MODE=off php bin/console app:import-earthquakes --no-debug --from=2026-09-01 --to=2026-09-30
+```
+
+Run this from `backend/`. `XDEBUG_MODE=off` suppresses Xdebug connection messages; `--no-debug` avoids development tracing overhead during backfills. Both dates are required in `YYYY-MM-DD` format. The command validates the range, requests each day in pages of up to 1,000 events, and inserts new USGS IDs or refreshes existing records. Historical mode cannot be combined with `--watch`; the watcher continues to use the past-day feed.
+
+Progress is saved in batches of 100 records; ORM entities and debug query history are cleared after each batch. If an import fails, rerun the same command: existing records are refreshed rather than duplicated. Large ranges can take time and perform many API requests. The same import lock prevents overlap with the watcher; stop the watcher before a backfill if it holds the lock. The date filter in the browser queries stored records and does not initiate imports itself.
+
+Catalogue documentation: [USGS earthquake web service](https://earthquake.usgs.gov/fdsnws/event/1/).
 
 ## API
 
@@ -210,7 +224,7 @@ Importer coverage is available with `php vendor/bin/phpunit tests/Command`. The 
 
 Although `.env` defines `CORS_ALLOW_ORIGIN`, the current CORS YAML uses a literal origin; changing that environment variable alone does not change the allowed frontend origin.
 
-For deployment, replace the frontend's local API URL with the deployed endpoint, configure CORS for the deployed frontend origin, build the frontend, and serve the Symfony application through its `backend/public/` document root. Configure production secrets and PostgreSQL, apply migrations, and arrange recurring imports if you need ongoing updates. This repository currently has no application deployment configuration; the import watcher must be started or supervised separately.
+For deployment, replace the frontend's local API URL with the deployed endpoint, configure CORS for the deployed frontend origin, build the frontend, and serve the Symfony application through its `backend/public/` document root. Configure production secrets and PostgreSQL, apply migrations, and run the watcher or arrange recurring imports if you need ongoing updates. This repository currently has no application deployment configuration; the import watcher must be started or supervised separately.
 
 ## Troubleshooting
 

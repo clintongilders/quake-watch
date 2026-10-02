@@ -4,6 +4,7 @@ namespace App\Tests\Command;
 
 use App\Command\ImportEarthquakesCommand;
 use App\Entity\Earthquake;
+use Symfony\Bridge\Doctrine\Middleware\Debug\DebugDataHolder;
 use App\Repository\EarthquakeRepository;
 use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Bundle\FrameworkBundle\Test\KernelTestCase;
@@ -11,7 +12,7 @@ use Symfony\Component\Console\Tester\CommandTester;
 use Symfony\Component\HttpClient\MockHttpClient;
 use Symfony\Component\HttpClient\Response\MockResponse;
 use Symfony\Component\Lock\LockFactory;
-use Symfony\Component\Lock\Store\FlockStore;
+use Symfony\Component\Lock\Store\InMemoryStore;
 
 final class ImportEarthquakesCommandTest extends KernelTestCase
 {
@@ -28,14 +29,14 @@ final class ImportEarthquakesCommandTest extends KernelTestCase
             static function (Earthquake $quake) use (&$records): void { $records[] = $quake; }
         );
         $manager->expects(self::once())->method('flush');
-        $manager->expects(self::once())->method('clear');
+        $manager->expects(self::exactly(2))->method('clear');
         $features = array_map(static fn (string $id) => [
             'id' => $id,
             'properties' => ['mag' => 4.5, 'place' => 'Test location', 'time' => 1760000000000],
             'geometry' => ['coordinates' => [-123, 49, 12]],
         ], ['existing', 'new']);
         $http = new MockHttpClient(new MockResponse(json_encode(['features' => $features], JSON_THROW_ON_ERROR)));
-        $tester = new CommandTester(new ImportEarthquakesCommand($http, $manager, $repository, new LockFactory(new FlockStore())));
+        $tester = new CommandTester(new ImportEarthquakesCommand($http, $manager, $repository, new LockFactory(new InMemoryStore())));
         self::assertSame(0, $tester->execute([]));
         self::assertSame(4.5, $existing->getMagnitude());
         self::assertSame('Test location', $existing->getPlace());
@@ -44,4 +45,57 @@ final class ImportEarthquakesCommandTest extends KernelTestCase
         self::assertSame(12.0, $records[1]->getDepth());
         self::assertStringContainsString('Imported 1 new earthquakes; refreshed 1 existing', $tester->getDisplay());
     }
+    public function testHistoricalImportPaginatesAndHandlesAnEmptyDay(): void
+    {
+        $feature = static fn (int $id) => [
+            'id' => 'history-'.$id,
+            'properties' => ['mag' => 3.2, 'place' => 'Historical event', 'time' => 1750000000000],
+            'geometry' => ['coordinates' => [-120, 40, 10]],
+        ];
+        $requests = [];
+        $http = new MockHttpClient(static function (string $method, string $url) use (&$requests, $feature): MockResponse {
+            parse_str(parse_url($url, PHP_URL_QUERY), $query);
+            $requests[] = $query;
+            $features = match (count($requests)) {
+                1 => array_map($feature, range(1, 1000)),
+                2 => [$feature(1001)],
+                default => [],
+            };
+            return new MockResponse(json_encode(['features' => $features]), ['http_code' => $features ? 200 : 204]);
+        });
+        $repository = $this->createStub(EarthquakeRepository::class);
+        $repository->method('findOneBy')->willReturn(null);
+        $manager = $this->createMock(EntityManagerInterface::class);
+        $manager->expects(self::exactly(1001))->method('persist');
+        $manager->expects(self::exactly(11))->method('flush');
+        $manager->expects(self::exactly(12))->method('clear');
+        $debugData = $this->createMock(DebugDataHolder::class);
+        $debugData->expects(self::exactly(14))->method('reset');
+        $tester = new CommandTester(new ImportEarthquakesCommand($http, $manager, $repository, new LockFactory(new InMemoryStore()), $debugData));
+        self::assertSame(0, $tester->execute(['--from' => '2026-09-01', '--to' => '2026-09-02']));
+        self::assertCount(3, $requests);
+        self::assertSame('2026-09-01T00:00:00Z', $requests[0]['starttime']);
+        self::assertSame('2026-09-01T23:59:59.999Z', $requests[0]['endtime']);
+        self::assertSame('1001', $requests[1]['offset']);
+        self::assertSame('2026-09-02T00:00:00Z', $requests[2]['starttime']);
+        self::assertSame('1', $requests[2]['offset']);
+        self::assertStringContainsString('Imported 1001 new earthquakes', $tester->getDisplay());
+    }
+
+    public function testInvalidRangesAreRejectedBeforeFetching(): void
+    {
+        $http = new MockHttpClient(static function (): never { self::fail('Invalid dates must not trigger HTTP requests.'); });
+        $manager = $this->createMock(EntityManagerInterface::class);
+        $manager->expects(self::never())->method('persist');
+        $tester = new CommandTester(new ImportEarthquakesCommand($http, $manager, $this->createStub(EarthquakeRepository::class), new LockFactory(new InMemoryStore())));
+        foreach ([
+            ['--from' => '2026-09-01'],
+            ['--from' => '2026-02-30', '--to' => '2026-03-01'],
+            ['--from' => '2026-09-02', '--to' => '2026-09-01'],
+            ['--from' => '2026-09-01', '--to' => '2026-09-02', '--watch' => true],
+        ] as $options) {
+            self::assertSame(2, $tester->execute($options));
+        }
+    }
+
 }

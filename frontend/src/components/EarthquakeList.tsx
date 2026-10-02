@@ -1,27 +1,35 @@
 import { useEffect, useState } from 'react';
-
 import EarthquakeMap, { type Earthquake } from './EarthquakeMap';
 
+type Range = '24h' | '7d' | '30d' | 'custom';
+interface Filters { range: Range; magnitude: string; from: string; through: string }
 interface EarthquakeCollection {
   totalItems: number;
   member: Earthquake[];
-  view?: {
-    next?: string;
-  };
+  view?: { next?: string; last?: string };
+}
+function defaults(): Filters {
+  const now = new Date();
+  return { range: '24h', magnitude: '', from: new Date(now.getTime() - 86400000).toISOString().slice(0, 19), through: now.toISOString().slice(0, 19) };
 }
 
 export default function EarthquakeList() {
+  const [filters, setFilters] = useState<Filters>(defaults);
+  const [draft, setDraft] = useState<Filters>(filters);
   const [earthquakes, setEarthquakes] = useState<Earthquake[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [minimumMagnitude, setMinimumMagnitude] = useState('');
-  const [startDate, setStartDate] = useState('');
-  const [endDate, setEndDate] = useState('');
   const [refresh, setRefresh] = useState(0);
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [totalItems, setTotalItems] = useState(0);
-  const invalidDates = Boolean(startDate && endDate && startDate > endDate);
+  const [totalPages, setTotalPages] = useState<number | null>(null);
+  const [pageSize, setPageSize] = useState(30);
+  const [page, setPage] = useState(1);
+  const [hasNextPage, setHasNextPage] = useState(false);
+  const [mobileView, setMobileView] = useState<'map' | 'table'>('map');
+  const invalidDates = draft.range === 'custom' && (!draft.from || !draft.through || draft.from > draft.through);
+  const pendingChanges = JSON.stringify(draft) !== JSON.stringify(filters);
 
   useEffect(() => {
     if (!autoRefresh) return;
@@ -29,131 +37,97 @@ export default function EarthquakeList() {
     return () => window.clearInterval(timer);
   }, [autoRefresh]);
 
-  const [page, setPage] = useState(1);
-  const [hasNextPage, setHasNextPage] = useState(false);
-
   useEffect(() => {
-    if (invalidDates) return;
     const controller = new AbortController();
     const url = new URL('https://127.0.0.1:8000/api/earthquakes');
-
     url.searchParams.set('page', String(page));
-
-    if (minimumMagnitude !== '') {
-      url.searchParams.set('magnitude[gte]', minimumMagnitude);
+    url.searchParams.set('itemsPerPage', String(pageSize));
+    if (filters.magnitude) url.searchParams.set('magnitude[gte]', filters.magnitude);
+    if (filters.range === 'custom') {
+      url.searchParams.set('occurredAt[after]', `${filters.from}Z`);
+      url.searchParams.set('occurredAt[before]', `${filters.through}Z`);
+    } else {
+      const through = new Date();
+      const days = filters.range === '24h' ? 1 : filters.range === '7d' ? 7 : 30;
+      url.searchParams.set('occurredAt[after]', new Date(through.getTime() - days * 86400000).toISOString());
+      url.searchParams.set('occurredAt[before]', through.toISOString());
     }
-
-    if (startDate) url.searchParams.set('occurredAt[after]', `${startDate}T00:00:00Z`);
-    if (endDate) url.searchParams.set('occurredAt[before]', `${endDate}T23:59:59Z`);
-
     fetch(url, { signal: controller.signal })
-      .then((response) => {
-        if (!response.ok) {
-          throw new Error(`Request failed: ${response.status}`);
-        }
-
+      .then(response => {
+        if (!response.ok) throw new Error(`Request failed: ${response.status}`);
         return response.json() as Promise<EarthquakeCollection>;
       })
-      .then((data) => {
-        if (!controller.signal.aborted) {
-          setEarthquakes(data.member);
-          setTotalItems(data.totalItems);
-          setLastUpdated(new Date());
-          setError(null);
-          setHasNextPage(Boolean(data.view?.next));
-        }
+      .then(data => {
+        if (controller.signal.aborted) return;
+        const lastPage = data.view?.last ? Number(new URL(data.view.last, url).searchParams.get('page')) : 1;
+        const pages = Number.isInteger(lastPage) && lastPage > 0 ? lastPage : 1;
+        if (page > pages) { setPage(pages); return; }
+        setEarthquakes(data.member);
+        setTotalItems(data.totalItems);
+        setTotalPages(pages);
+        setHasNextPage(Boolean(data.view?.next));
+        setLastUpdated(new Date());
+        setError(null);
       })
       .catch((err: unknown) => {
-        if (controller.signal.aborted) {
-          return;
-        }
-
-        if (err instanceof Error) {
-          setError(err.message);
-        } else {
-          setError('An unknown error occurred');
-        }
+        if (!controller.signal.aborted) setError(err instanceof Error ? err.message : 'An unknown error occurred');
       })
-      .finally(() => {
-        if (!controller.signal.aborted) {
-          setLoading(false);
-        }
-      });
-
+      .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
-  }, [minimumMagnitude, page, startDate, endDate, refresh, invalidDates]);
+  }, [filters, page, pageSize, refresh]);
 
+  function apply(next: Filters) {
+    setFilters({ ...next });
+    setPage(1);
+    setLoading(true);
+    setError(null);
+  }
   function changePage(nextPage: number) {
     setPage(nextPage);
     setLoading(true);
     setError(null);
   }
+  const firstResult = totalItems ? (page - 1) * pageSize + 1 : 0;
+  const lastResult = totalItems ? firstResult + earthquakes.length - 1 : 0;
+  const pagination = <nav className="pagination" aria-label="Earthquake pagination">
+    <span className="result-range">{firstResult}–{lastResult} of {totalItems.toLocaleString()} earthquakes</span>
+    <div className="page-controls">
+      <button type="button" disabled={loading || page === 1} onClick={() => changePage(page - 1)}>Previous</button>
+      <span aria-live="polite">Page {page}{totalPages !== null ? ` of ${totalPages}` : ''}</span>
+      <button type="button" disabled={loading || error !== null || !hasNextPage} onClick={() => changePage(page + 1)}>Next</button>
+    </div>
+  </nav>;
 
-  const pagination = (
-    <nav aria-label="Earthquake pagination">
-        <button
-          type="button"
-          disabled={loading || invalidDates || page === 1}
-          onClick={() => changePage(page - 1)}
-        >
-          Previous
-        </button>
-        <span aria-live="polite"> Page {page} </span>
-        <button
-          type="button"
-          disabled={loading || invalidDates || error !== null || !hasNextPage}
-          onClick={() => changePage(page + 1)}
-        >
-          Next
-        </button>
-      </nav>
-  );
-
-  return (
-    <section className="earthquake-panel" aria-labelledby="earthquake-heading">
-      <div className="panel-toolbar">
-      <h2 id="earthquake-heading">Recent earthquakes</h2>
-      <div className="magnitude-filter">
-
-      <label htmlFor="minimum-magnitude">Minimum magnitude: </label>
-      <select
-        id="minimum-magnitude"
-        value={minimumMagnitude}
-        onChange={(event) => {
-          setMinimumMagnitude(event.target.value);
-          setPage(1);
-          setLoading(true);
-          setError(null);
-        }}
-      >
-        <option value="">All</option>
-        <option value="2">2+</option>
-        <option value="3">3+</option>
-        <option value="4">4+</option>
-        <option value="5">5+</option>
-      </select>
+  return <section className="earthquake-panel" aria-labelledby="earthquake-heading">
+    <div className="panel-toolbar"><div><h2 id="earthquake-heading">Recent earthquakes</h2><p className="panel-subtitle">Explore by time and magnitude</p></div></div>
+    <form className="filter-form" onSubmit={event => { event.preventDefault(); if (!invalidDates) apply(draft); }}>
+      <fieldset className="range-options"><legend>Time range</legend>
+        {([['24h', 'Last 24 hours'], ['7d', '7 days'], ['30d', '30 days'], ['custom', 'Custom']] as const).map(([value, label]) =>
+          <label key={value} className={draft.range === value ? 'selected' : ''}><input type="radio" name="range" value={value} checked={draft.range === value} onChange={() => setDraft({ ...draft, range: value })} />{label}</label>)}
+      </fieldset>
+      <div className="filter-bottom">
+        <label className="filter-field" htmlFor="minimum-magnitude">Minimum magnitude<select id="minimum-magnitude" value={draft.magnitude} onChange={event => setDraft({ ...draft, magnitude: event.target.value })}>
+          <option value="">All magnitudes</option>{['2', '3', '4', '5'].map(value => <option key={value} value={value}>{value}+</option>)}
+        </select></label>
+        {draft.range === 'custom' && <div className="custom-dates">
+          <label className="filter-field">From<input required type="datetime-local" step="1" value={draft.from} max={draft.through || undefined} onInput={event => setDraft({ ...draft, from: event.currentTarget.value })} /></label>
+          <label className="filter-field">Through<input required type="datetime-local" step="1" value={draft.through} min={draft.from || undefined} onInput={event => setDraft({ ...draft, through: event.currentTarget.value })} /></label>
+          <span className="utc-note">Times in UTC</span>
+        </div>}
+        <div className="filter-actions"><button className="primary-button" type="submit" disabled={invalidDates}>Apply filters</button><button type="button" onClick={() => { const next = defaults(); setDraft(next); apply(next); }}>Reset</button></div>
       </div>
-      </div>
-
-      <div className="date-toolbar">
-        <label>From (UTC)<input type="date" value={startDate} max={endDate || undefined} onInput={event => { setStartDate(event.currentTarget.value); changePage(1); }} /></label>
-        <label>Through (UTC)<input type="date" value={endDate} min={startDate || undefined} onInput={event => { setEndDate(event.currentTarget.value); changePage(1); }} /></label>
-        <button type="button" onClick={() => { setStartDate(''); setEndDate(''); changePage(1); }}>Clear dates</button>
-        <label className="auto-refresh"><input type="checkbox" checked={autoRefresh} onChange={event => setAutoRefresh(event.target.checked)} /> Refresh every minute</label>
-        <button type="button" disabled={loading || invalidDates} onClick={() => { setLoading(true); setRefresh(value => value + 1); }}>Refresh now</button>
-      </div>
-      {invalidDates && <p role="alert" className="error-message">From must be on or before Through.</p>}
-      <p className="update-status" aria-live="polite">{totalItems} matching earthquakes · {lastUpdated ? `Results fetched ${lastUpdated.toLocaleTimeString()}` : 'Waiting for data'}</p>
-      {!invalidDates && !loading && !error && <EarthquakeMap earthquakes={earthquakes} />}
-      {pagination}
-
-      {invalidDates ? null : loading ? (
-        <p className="status-message" role="status">Loading earthquakes...</p>
-      ) : error ? (
-        <p className="status-message error-message" role="alert">Error: {error}</p>
-      ) : earthquakes.length === 0 ? (
-        <p className="status-message" role="status">No earthquakes match this filter.</p>
-      ) : (
+      {invalidDates && <p role="alert" className="filter-message">Choose both dates, with From on or before Through.</p>}
+      {pendingChanges && !invalidDates && <p className="filter-message">Changes ready — apply filters to update results.</p>}
+    </form>
+    <div className="results-status">
+      <span aria-live="polite">{loading ? 'Updating results…' : `${totalItems.toLocaleString()} matching earthquakes`}{lastUpdated && ` · Updated ${lastUpdated.toLocaleTimeString()}`}</span>
+      <div className="refresh-controls"><label>Per page<select aria-label="Results per page" value={pageSize} onChange={event => { setPageSize(Number(event.target.value)); changePage(1); }}>{[10, 30, 50, 100].map(size => <option key={size} value={size}>{size}</option>)}</select></label><label><input type="checkbox" checked={autoRefresh} onChange={event => setAutoRefresh(event.target.checked)} /> Auto-refresh</label><button type="button" disabled={loading} onClick={() => { setLoading(true); setRefresh(value => value + 1); }}>Refresh</button></div>
+    </div>
+    <div className="mobile-view-toggle" role="group" aria-label="Results view"><button type="button" aria-pressed={mobileView === 'map'} onClick={() => setMobileView('map')}>Map</button><button type="button" aria-pressed={mobileView === 'table'} onClick={() => setMobileView('table')}>Table</button></div>
+    {pagination}
+    {loading ? <p className="status-message" role="status">Loading earthquakes…</p> : error ? <p className="status-message error-message" role="alert">Error: {error}</p> : earthquakes.length === 0 ? <p className="status-message" role="status">No earthquakes match these filters.</p> : <>
+      <div className={`map-view ${mobileView !== 'map' ? 'mobile-hidden' : ''}`}><EarthquakeMap earthquakes={earthquakes} /></div>
+      <div className={`table-view ${mobileView !== 'table' ? 'mobile-hidden' : ''}`}>
         <div className="table-scroll" tabIndex={0} role="region" aria-label="Recent earthquake results">
         <table>
           <thead>
@@ -177,8 +151,8 @@ export default function EarthquakeList() {
           </tbody>
         </table>
         </div>
-      )}
-      {pagination}
-    </section>
-  );
+      </div>
+    </>}
+    {pagination}
+  </section>;
 }
