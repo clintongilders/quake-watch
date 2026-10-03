@@ -3,6 +3,9 @@ api_platform:
     version: 1.0.0
     defaults:
         stateless: true
+        # Unknown magnitudes and depths must be sent as explicit nulls.
+        normalization_context:
+            skip_null_values: false
         pagination_items_per_page: 30
         pagination_client_items_per_page: true
         pagination_maximum_items_per_page: 100

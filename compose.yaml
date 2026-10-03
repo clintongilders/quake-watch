@@ -22,7 +22,8 @@ services:
       LOCK_DSN: flock:///app/var/locks
     depends_on:
       database: {condition: service_healthy}
-    volumes: [backend_var:/app/var]
+    # Only locks are shared; the compiled Symfony cache must not outlive the image.
+    volumes: [backend_locks:/app/var/locks]
   frontend:
     build:
       context: ./frontend
@@ -36,10 +37,11 @@ services:
     environment: *backend_env
     depends_on:
       database: {condition: service_healthy}
-    volumes: [backend_var:/app/var]
+    # Only locks are shared; the compiled Symfony cache must not outlive the image.
+    volumes: [backend_locks:/app/var/locks]
     # Each cycle is a new PHP process; failed cycles retry without retaining ORM state.
     command: [sh, -c, 'while true; do php bin/console app:import-earthquakes --no-interaction; sleep 300; done']
     restart: unless-stopped
 volumes:
   postgres_data:
-  backend_var:
+  backend_locks:

@@ -3,8 +3,12 @@ import L from "leaflet";
 import Supercluster from "supercluster";
 import "leaflet/dist/leaflet.css";
 
-import { magnitudeLabel, type Earthquake } from "../lib/api";
+import { depthLabel, magnitudeLabel, type Earthquake } from "../lib/api";
 export type { Earthquake } from "../lib/api";
+
+type Viewport = { zoom: number; bbox: [number, number, number, number] };
+const WORLD: Viewport = { zoom: 2, bbox: [-180, -90, 180, 90] };
+const CLUSTER_ABOVE = 2000;
 
 export default function EarthquakeMap({
   earthquakes,
@@ -18,7 +22,11 @@ export default function EarthquakeMap({
   const [height, setHeight] = useState(() =>
     window.matchMedia("(max-width: 640px)").matches ? 320 : 420,
   );
-  const [zoom, setZoom] = useState(2);
+  const [viewport, setViewport] = useState(WORLD);
+  // Small result sets draw every marker once; only clustered ones follow the viewport.
+  const clustered = earthquakes.length > CLUSTER_ABOVE;
+  const clusterView = clustered ? viewport : null;
+  const clusterSelectedId = clustered ? selectedId : null;
   const clusterIndex = useMemo(
     () =>
       new Supercluster<{ quake: Earthquake }>({ radius: 50, maxZoom: 16 }).load(
@@ -69,13 +77,33 @@ export default function EarthquakeMap({
       },
     ).addTo(instance);
     map.current = instance;
-    const onZoom = () => setZoom(instance.getZoom());
-    instance.on("zoomend", onZoom);
+    const onMove = () => {
+      const bounds = instance.getBounds();
+      const [west, south, east, north] = [
+        bounds.getWest(),
+        bounds.getSouth(),
+        bounds.getEast(),
+        bounds.getNorth(),
+      ];
+      // Pad so markers just outside the edge are ready when panning.
+      const x = (east - west) / 4;
+      const y = (north - south) / 4;
+      setViewport({
+        zoom: instance.getZoom(),
+        bbox: [
+          Math.max(-180, west - x),
+          Math.max(-90, south - y),
+          Math.min(180, east + x),
+          Math.min(90, north + y),
+        ],
+      });
+    };
+    instance.on("moveend", onMove);
     const observer = new ResizeObserver(() => instance.invalidateSize());
     observer.observe(container.current);
     return () => {
       observer.disconnect();
-      instance.off("zoomend", onZoom);
+      instance.off("moveend", onMove);
       instance.remove();
       map.current = null;
     };
@@ -84,12 +112,10 @@ export default function EarthquakeMap({
     if (!map.current) return;
     markerIndex.current.clear();
     const markers = L.featureGroup().addTo(map.current);
-    const points =
-      earthquakes.length > 2000
-        ? clusterIndex.getClusters([-180, -90, 180, 90], zoom)
-        : [];
-    const visibleQuakes: Earthquake[] =
-      earthquakes.length > 2000 ? [] : [...earthquakes];
+    const points = clusterView
+      ? clusterIndex.getClusters(clusterView.bbox, clusterView.zoom)
+      : [];
+    const visibleQuakes: Earthquake[] = clusterView ? [] : [...earthquakes];
     for (const point of points) {
       if ("cluster" in point.properties && point.properties.cluster) {
         const properties = point.properties;
@@ -116,8 +142,11 @@ export default function EarthquakeMap({
       } else if ("quake" in point.properties)
         visibleQuakes.push(point.properties.quake);
     }
-    if (selectedId && !visibleQuakes.some((q) => q.usgsId === selectedId)) {
-      const selected = earthquakes.find((q) => q.usgsId === selectedId);
+    if (
+      clusterSelectedId &&
+      !visibleQuakes.some((q) => q.usgsId === clusterSelectedId)
+    ) {
+      const selected = earthquakes.find((q) => q.usgsId === clusterSelectedId);
       if (selected) visibleQuakes.push(selected);
     }
     for (const quake of visibleQuakes) {
@@ -128,7 +157,7 @@ export default function EarthquakeMap({
         const title = document.createElement("strong");
         title.textContent = `M ${magnitudeLabel(quake.magnitude)} — ${quake.place}`;
         const detail = document.createElement("p");
-        detail.textContent = `${new Date(quake.occurredAt).toLocaleString()} · ${quake.depth.toFixed(2)} km deep`;
+        detail.textContent = `${new Date(quake.occurredAt).toLocaleString()} · ${quake.depth === null ? depthLabel(null) : `${depthLabel(quake.depth)} deep`}`;
         const link = document.createElement("a");
         link.href = `https://earthquake.usgs.gov/earthquakes/eventpage/${encodeURIComponent(quake.usgsId)}`;
         link.textContent = "View on USGS";
@@ -142,11 +171,13 @@ export default function EarthquakeMap({
       const marker = L.circleMarker([quake.latitude, quake.longitude], {
         radius: Math.max(5, Math.min(22, (quake.magnitude ?? 1) * 3)),
         color:
-          quake.depth < 70
-            ? "#0f766e"
-            : quake.depth < 300
-              ? "#b45309"
-              : "#be123c",
+          quake.depth === null
+            ? "#475569"
+            : quake.depth < 70
+              ? "#0f766e"
+              : quake.depth < 300
+                ? "#b45309"
+                : "#be123c",
         fillOpacity: 0.65,
         weight: 2,
       })
@@ -155,17 +186,37 @@ export default function EarthquakeMap({
         .addTo(markers);
       markerIndex.current.set(quake.usgsId, marker);
     }
-    if (markers.getLayers().length && fittedKey.current !== fitKey) {
-      map.current.fitBounds(markers.getBounds(), {
-        padding: [30, 30],
-        maxZoom: 7,
-      });
-      fittedKey.current = fitKey;
+    if (fittedKey.current !== fitKey) {
+      // Fit to every result, not just the markers drawn for the current viewport.
+      let [south, west, north, east] = [90, 180, -90, -180];
+      let any = false;
+      for (const quake of earthquakes) {
+        if (
+          !Number.isFinite(quake.latitude) ||
+          !Number.isFinite(quake.longitude)
+        )
+          continue;
+        any = true;
+        south = Math.min(south, quake.latitude);
+        north = Math.max(north, quake.latitude);
+        west = Math.min(west, quake.longitude);
+        east = Math.max(east, quake.longitude);
+      }
+      if (any) {
+        map.current.fitBounds(
+          [
+            [south, west],
+            [north, east],
+          ],
+          { padding: [30, 30], maxZoom: 7 },
+        );
+        fittedKey.current = fitKey;
+      }
     }
     return () => {
       markers.remove();
     };
-  }, [earthquakes, fitKey, selectedId, clusterIndex, zoom]);
+  }, [earthquakes, fitKey, clusterSelectedId, clusterIndex, clusterView]);
   useEffect(() => {
     if (highlighted.current)
       highlighted.current.setStyle({ weight: 2, fillOpacity: 0.65 });
@@ -184,7 +235,7 @@ export default function EarthquakeMap({
       marker.openPopup();
       focusedId.current = selectedId;
     }
-  }, [selectedId, earthquakes, zoom]);
+  }, [selectedId, earthquakes, clusterView]);
   return (
     <section aria-label="Earthquake map">
       <div ref={container} className="earthquake-map" style={{ height }} />
@@ -239,8 +290,8 @@ export default function EarthquakeMap({
         earthquakes. Large result sets are clustered; select a cluster to zoom.
         Size: magnitude (unknown magnitudes use a small marker). Depth:{" "}
         <span>● shallow (&lt;70 km)</span> ·{" "}
-        <span>● intermediate (70–300 km)</span> · <span>● deep (≥300 km)</span>.
-        Select a marker for details.
+        <span>● intermediate (70–300 km)</span> · <span>● deep (≥300 km)</span>{" "}
+        · <span>● unknown</span>. Select a marker for details.
       </p>
     </section>
   );

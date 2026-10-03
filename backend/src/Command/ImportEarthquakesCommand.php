@@ -60,7 +60,7 @@ class ImportEarthquakesCommand extends Command
             $imported = $updated = $skipped = 0;
             foreach ($this->batches($from, $to, $started) as $features) {
                 $lock->refresh();
-                $rows = [];
+                $rows = $aliases = [];
                 foreach ($features as $feature) {
                     if (($feature['properties']['type'] ?? null) !== 'earthquake') {
                         ++$skipped;
@@ -72,10 +72,11 @@ class ImportEarthquakesCommand extends Command
                         continue;
                     }
                     $rows[] = $row;
+                    $aliases[$row[0]] = $this->aliases($feature['properties']['ids'] ?? null, $row[0]);
                 }
                 foreach (array_chunk($rows, 100) as $batch) {
                     $lock->refresh();
-                    [$new, $changed] = $this->writer->write($batch);
+                    [$new, $changed] = $this->writer->write($batch, array_merge(...array_map(static fn (array $row): array => $aliases[$row[0]], $batch)));
                     $imported += $new;
                     $updated += $changed;
                 }
@@ -110,7 +111,11 @@ class ImportEarthquakesCommand extends Command
         if (!is_string($id) || '' === $id || strlen($id) > 255 || (!is_numeric($p['time'] ?? null) || !is_finite((float) $p['time'])) || count($c) < 3) {
             return null;
         }
-        foreach (array_slice($c, 0, 3) as $coordinate) {
+        foreach (array_slice($c, 0, 3) as $index => $coordinate) {
+            // USGS reports an unknown depth as null.
+            if (2 === $index && null === $coordinate) {
+                continue;
+            }
             if (!is_numeric($coordinate) || !is_finite((float) $coordinate)) {
                 return null;
             }
@@ -124,7 +129,22 @@ class ImportEarthquakesCommand extends Command
         }
         $time = (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))->setTimestamp((int) ((float) $p['time'] / 1000));
 
-        return [$id, null === $mag ? null : (float) $mag, mb_substr(is_string($p['place'] ?? null) ? $p['place'] : 'Unknown', 0, 255), $time->format('Y-m-d H:i:s'), (float) $c[0], (float) $c[1], (float) $c[2]];
+        return [$id, null === $mag ? null : (float) $mag, mb_substr(is_string($p['place'] ?? null) ? $p['place'] : 'Unknown', 0, 255), $time->format('Y-m-d H:i:s'), (float) $c[0], (float) $c[1], null === $c[2] ? null : (float) $c[2]];
+    }
+
+    /**
+     * USGS lists every network ID for an event as ",ci1,us2,". When the preferred ID
+     * changes, the others identify rows this event supersedes.
+     *
+     * @return list<string>
+     */
+    private function aliases(mixed $ids, string $id): array
+    {
+        if (!is_string($ids)) {
+            return [];
+        }
+
+        return array_values(array_filter(explode(',', $ids), static fn (string $alias): bool => '' !== $alias && $alias !== $id && strlen($alias) <= 255));
     }
 
     private function batches(?string $from, ?string $to, \DateTimeImmutable $started): \Generator

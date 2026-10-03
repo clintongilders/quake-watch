@@ -8,7 +8,7 @@ export const earthquakeSchema = z.object({
   occurredAt: z.string().datetime({ offset: true }),
   latitude: z.number().finite(),
   longitude: z.number().finite(),
-  depth: z.number().finite(),
+  depth: z.number().finite().nullable(),
 });
 export type Earthquake = z.infer<typeof earthquakeSchema>;
 export const collectionSchema = z.object({
@@ -31,7 +31,7 @@ const geojsonSchema = z.object({
         coordinates: z.tuple([
           z.number().finite(),
           z.number().finite(),
-          z.number().finite(),
+          z.number().finite().nullable(),
         ]),
       }),
       properties: z.object({
@@ -84,3 +84,5 @@ export async function fetchMap(url: URL, signal: AbortSignal) {
 }
 export const magnitudeLabel = (magnitude: number | null) =>
   magnitude === null ? "Unknown" : magnitude.toFixed(2);
+export const depthLabel = (depth: number | null) =>
+  depth === null ? "Unknown depth" : `${depth.toFixed(2)} km`;

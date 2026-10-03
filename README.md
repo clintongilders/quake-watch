@@ -5,7 +5,7 @@ An earthquake explorer built with React 19, TypeScript, Symfony 8.1, API Platfor
 ## Features
 
 - Last 24 hours by default; 7 days, 30 days, or inclusive custom UTC timestamps.
-- Apply/reset minimum-magnitude filters; unknown magnitudes are shown as **Unknown**, rather than zero.
+- Apply/reset minimum-magnitude filters; unknown magnitudes and depths are shown as **Unknown**, rather than zero.
 - Sort the complete filtered dataset by magnitude, time, or depth. Table pagination is independent of the map.
 - Select a table row or its keyboard-accessible location button to highlight the quake and open map details.
 - One GeoJSON request for map results, with clustering above 2,000 events. Map refresh preserves pan, zoom, selection, and canvas height.
@@ -91,7 +91,7 @@ A successful live import stores its **start time** in `import_checkpoint`. If th
 
 Ensure the scheduled process receives `DATABASE_URL` and `APP_SECRET`; do not put secrets into a committed crontab. Rotate the log. A lock prevents overlapping imports; a busy run skips successfully. `LOCK_DSN=flock` works on one host. The application Compose stack shares `flock:///app/var/locks` between containers. Multiple hosts require a shared Symfony-supported lock store.
 
-**Existing data:** the migration does not guess which old zeros meant unknown, or which historical timestamps used a non-UTC PHP timezone. Reimport the affected historical range to refresh those values from USGS. It also cannot identify older non-earthquake records whose source type was never stored; reconcile those against USGS before deleting them. Records are not deleted merely because they age out of the live feed.
+**Existing data:** the migration does not guess which old zeros meant unknown, or which historical timestamps used a non-UTC PHP timezone. Reimport the affected historical range to refresh those values from USGS. It also cannot identify older non-earthquake records whose source type was never stored; reconcile those against USGS before deleting them. Records are not deleted merely because they age out of the live feed. When USGS merges network reports and changes an event's preferred ID, the import replaces the rows stored under its previous IDs.
 
 USGS catalogue documentation: [earthquake web service](https://earthquake.usgs.gov/fdsnws/event/1/).
 
@@ -103,11 +103,11 @@ USGS catalogue documentation: [earthquake web service](https://earthquake.usgs.g
 | `GET /api/earthquakes/{id}` | One record by database ID. |
 | `GET /api/earthquakes/map` | GeoJSON FeatureCollection with `totalItems` and `truncated`. |
 
-Collection fields: `id`, `usgsId`, nullable `magnitude`, `place`, `occurredAt`, `latitude`, `longitude`, `depth`. Table page size defaults to 30, capped at 100. Filters include `magnitude[gte]`, depth comparisons, and `occurredAt[after]`/`[before]`. Sort parameters `sortMagnitude`, `sortOccurredAt`, and `sortDepth` accept `asc` or `desc`.
+Collection fields: `id`, `usgsId`, nullable `magnitude`, `place`, `occurredAt`, `latitude`, `longitude`, nullable `depth`. Unknown values are sent as explicit `null` and sort last in either direction. Table page size defaults to 30, capped at 100. Filters include `magnitude[gte]`, depth comparisons, and `occurredAt[after]`/`[before]`. Sort parameters `sortMagnitude`, `sortOccurredAt`, and `sortDepth` accept `asc` or `desc`.
 
-The map accepts `magnitude[gte]`, inclusive ISO-8601 `occurredAt[after]`/`[before]` with timezones, and optional `south`, `north`, `west`, `east` bounds. Split bounding boxes crossing the antimeridian. Feature coordinates are `[longitude, latitude, depth]`; properties are magnitude, place, and UTC occurredAt. It returns up to **50,000** events, with a visible warning to narrow filters if the results are capped. This bound protects server/browser memory; the table can still paginate all matching records. Ordinary 24-hour and 30-day views load the full map dataset in one request.
+The map accepts `magnitude[gte]`, inclusive ISO-8601 `occurredAt[after]`/`[before]` with timezones, and optional `south`, `north`, `west`, `east` bounds. Split bounding boxes crossing the antimeridian. Feature coordinates are `[longitude, latitude, depth]` (depth may be `null`); properties are magnitude, place, and UTC occurredAt. It returns up to **50,000** events, with a visible warning to narrow filters if the results are capped. This bound protects server/browser memory; the table can still paginate all matching records. Ordinary 24-hour and 30-day views load the full map dataset in one request.
 
-Map responses use a 60-second server cache, public HTTP caching, and ETags/conditional requests. API Platform collection/item responses have 60-second cache headers. PostgreSQL indexes cover occurrence time plus magnitude, magnitude, and depth. The frontend validates API responses with Zod rather than trusting handwritten casts.
+Map responses use 60-second public HTTP caching and ETags/conditional requests. API Platform collection/item responses have 60-second cache headers. PostgreSQL indexes cover occurrence time plus magnitude, magnitude, and depth. The frontend validates API responses with Zod rather than trusting handwritten casts.
 
 ```sh
 curl 'https://127.0.0.1:8000/api/earthquakes?magnitude%5Bgte%5D=3&sortDepth=asc'
@@ -182,7 +182,7 @@ docker compose exec backend php bin/console doctrine:migrations:migrate --no-int
 docker compose up -d frontend importer
 ```
 
-Open `http://localhost:8080`. Migration runs are explicit and must precede starting the importer. `APP_ENV=prod` and `APP_DEBUG=0` are set by the stack. Persistent PostgreSQL and backend cache/lock volumes survive container restarts. Do not run `docker compose down -v` against data you want to keep.
+Open `http://localhost:8080`. Migration runs are explicit and must precede starting the importer. `APP_ENV=prod` and `APP_DEBUG=0` are set by the stack. The PostgreSQL volume and the shared import-lock volume survive container restarts; the compiled Symfony cache lives in the container and is rebuilt with each new image. Do not run `docker compose down -v` against data you want to keep.
 
 For public hosting, terminate HTTPS at a reverse proxy, provision backups, supply secrets through the hosting environment, and choose tile service settings appropriate to your traffic. `VITE_TILE_URL`/`VITE_TILE_ATTRIBUTION` are frontend build arguments in Compose; changing them requires a rebuild. Same-origin hosting needs no cross-origin configuration. Separate API hosting also needs `VITE_API_URL` at build time and a restrictive `CORS_ALLOW_ORIGIN` on the backend.
 
@@ -193,7 +193,7 @@ OpenStreetMap's public tiles permit ordinary interactive use under their [tile u
 ```text
 backend/src/Command/ImportEarthquakesCommand.php  Validates/fetches USGS records
 backend/src/Service/EarthquakeWriter.php         Atomic batch upserts and checkpoints
-backend/src/Controller/EarthquakeMapController.php  Cached slim map endpoint
+backend/src/Controller/EarthquakeMapController.php  Slim map endpoint
 backend/src/Dto/MapFilters.php                   Validated map request parameters
 backend/src/Entity/                              Read-only API model and checkpoint
 backend/migrations/                             PostgreSQL schema evolution

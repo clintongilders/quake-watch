@@ -53,6 +53,26 @@ final class ImportEarthquakesCommandTest extends KernelTestCase
         self::assertStringContainsString('refreshed 1 existing', $tester->getDisplay());
     }
 
+    public function testPreferredIdChangeReplacesTheSupersededRecord(): void
+    {
+        $merged = $this->feature('us2');
+        $merged['properties']['ids'] = ',test,us2,';
+        $tester = $this->tester(new MockHttpClient([$this->response([$this->feature(), $this->feature('other')]), $this->response([$merged])]));
+        self::assertSame(0, $tester->execute([]));
+        self::assertSame(0, $tester->execute([]));
+        self::assertEqualsCanonicalizing(['other', 'us2'], $this->db->fetchFirstColumn('SELECT usgs_id FROM earthquake'));
+    }
+
+    public function testUnknownDepthIsStoredAsNull(): void
+    {
+        $feature = $this->feature();
+        $feature['geometry']['coordinates'][2] = null;
+        $tester = $this->tester(new MockHttpClient($this->response([$feature])));
+        self::assertSame(0, $tester->execute([]));
+        self::assertSame(1, (int) $this->db->fetchOne('SELECT COUNT(*) FROM earthquake'));
+        self::assertNull($this->db->fetchOne('SELECT depth FROM earthquake'));
+    }
+
     public function testTimestampIsUtcEvenWithNonUtcPhpTimezone(): void
     {
         $previous = date_default_timezone_get();

@@ -357,3 +357,33 @@ it("displays unknown magnitudes and warns when the map response is capped", asyn
     "Narrow the filters",
   );
 });
+
+it("keeps the table on screen while an auto-refresh loads, and shows unknown depths", async () => {
+  vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+  let release = () => {};
+  let hold = false;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: string | URL) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith("/map")) return mapReply([quake("a")]);
+      if (hold) await new Promise<void>((resolve) => (release = resolve));
+      return reply([{ ...quake("a"), depth: null }]);
+    }),
+  );
+  render(<EarthquakeList />);
+  await ready();
+  expect(screen.getByText("Unknown depth")).toBeInTheDocument();
+  hold = true;
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(60000);
+  });
+  expect(
+    screen.getByRole("button", { name: "Show Location a on map" }),
+  ).toBeInTheDocument();
+  expect(screen.queryByText("Loading earthquakes…")).not.toBeInTheDocument();
+  expect(
+    screen.getByRole("region", { name: "Recent earthquake results" }),
+  ).toHaveAttribute("aria-busy", "true");
+  await act(async () => release());
+});

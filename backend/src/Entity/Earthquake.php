@@ -2,6 +2,7 @@
 
 namespace App\Entity;
 
+use ApiPlatform\Doctrine\Common\Filter\OrderFilterInterface;
 use ApiPlatform\Doctrine\Orm\Filter\ComparisonFilter;
 use ApiPlatform\Doctrine\Orm\Filter\DateFilter;
 use ApiPlatform\Doctrine\Orm\Filter\ExactFilter;
@@ -39,11 +40,11 @@ use Doctrine\ORM\Mapping as ORM;
             property: 'occurredAt',
         ),
         'sortDepth' => new QueryParameter(
-            filter: new SortFilter(),
+            filter: new SortFilter(OrderFilterInterface::NULLS_ALWAYS_LAST),
             property: 'depth',
         ),
         'sortMagnitude' => new QueryParameter(
-            filter: new SortFilter(),
+            filter: new SortFilter(OrderFilterInterface::NULLS_ALWAYS_LAST),
             property: 'magnitude',
         ),
     ],
@@ -77,8 +78,8 @@ class Earthquake
     #[ORM\Column]
     private float $longitude;
 
-    #[ORM\Column]
-    private float $depth;
+    #[ORM\Column(nullable: true)]
+    private ?float $depth = null;
 
     public function getId(): ?int
     {
@@ -157,12 +158,12 @@ class Earthquake
         return $this;
     }
 
-    public function getDepth(): float
+    public function getDepth(): ?float
     {
         return $this->depth;
     }
 
-    public function setDepth(float $depth): static
+    public function setDepth(?float $depth): static
     {
         $this->depth = $depth;
 

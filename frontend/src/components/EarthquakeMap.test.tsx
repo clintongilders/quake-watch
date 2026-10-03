@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, expect, it, vi } from "vitest";
 import EarthquakeMap, { type Earthquake } from "./EarthquakeMap";
 
@@ -7,6 +7,12 @@ const leaflet = vi.hoisted(() => {
     setView: vi.fn(),
     fitBounds: vi.fn(),
     getZoom: vi.fn(() => 2),
+    getBounds: vi.fn((): Record<string, () => number> => ({
+      getWest: () => -180,
+      getSouth: () => -85,
+      getEast: () => 180,
+      getNorth: () => 85,
+    })),
     invalidateSize: vi.fn(),
     on: vi.fn(),
     off: vi.fn(),
@@ -245,4 +251,56 @@ it("clusters large results and keeps the selected quake available", () => {
   expect(
     leaflet.markers.some((marker) => marker.openPopup.mock.calls.length > 0),
   ).toBe(true);
+});
+
+it("redraws clusters for the visible area only, and leaves small result sets alone", () => {
+  const many = Array.from({ length: 2001 }, (_, i) => ({
+    ...quake,
+    id: i,
+    usgsId: `quake-${i}`,
+    longitude: -170 + (i % 340),
+    latitude: -60 + (i % 120),
+  }));
+  const moved = () => {
+    const handler = leaflet.map.on.mock.calls.find(
+      ([event]) => event === "moveend",
+    )![1] as () => void;
+    leaflet.map.getZoom.mockReturnValue(16);
+    leaflet.map.getBounds.mockReturnValue({
+      getWest: () => -170.5,
+      getSouth: () => -60.5,
+      getEast: () => -169.5,
+      getNorth: () => -59.5,
+    });
+    act(handler);
+  };
+  const { unmount } = render(
+    <EarthquakeMap earthquakes={many} selectedId={null} />,
+  );
+  leaflet.circleMarker.mockClear();
+  moved();
+  const drawn = leaflet.circleMarker.mock.calls.length;
+  expect(drawn).toBeGreaterThan(0);
+  expect(drawn).toBeLessThan(50);
+  unmount();
+  leaflet.map.on.mockClear();
+  render(<EarthquakeMap earthquakes={[quake]} selectedId={null} />);
+  leaflet.circleMarker.mockClear();
+  moved();
+  expect(leaflet.circleMarker).not.toHaveBeenCalled();
+});
+
+it("draws quakes with an unknown depth", () => {
+  render(
+    <EarthquakeMap
+      earthquakes={[{ ...quake, depth: null }]}
+      selectedId={null}
+    />,
+  );
+  expect(leaflet.circleMarker).toHaveBeenCalledWith(
+    [quake.latitude, quake.longitude],
+    expect.objectContaining({ color: "#475569" }),
+  );
+  const popup = leaflet.markers[0].bindPopup.mock.calls[0][0]() as HTMLElement;
+  expect(popup.textContent).toContain("Unknown depth");
 });

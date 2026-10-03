@@ -8,7 +8,7 @@ COPY composer.json composer.lock symfony.lock ./
 RUN composer install --no-dev --no-scripts --no-autoloader --no-interaction --prefer-dist
 COPY . .
 RUN composer dump-autoload --no-dev --classmap-authoritative --no-scripts \
-    && mkdir -p var && chown -R www-data:www-data var
+    && mkdir -p var/locks && chown -R www-data:www-data var
 COPY docker/php.ini /usr/local/etc/php/conf.d/quakewatch.ini
 USER www-data
 CMD ["php-fpm"]

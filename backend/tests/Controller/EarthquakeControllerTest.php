@@ -71,6 +71,29 @@ final class EarthquakeControllerTest extends WebTestCase
         self::assertSame($expected, array_column($this->collection([$parameter => $direction])['member'], 'usgsId'));
     }
 
+    public function testUnknownValuesSortLastAndSerializeAsNull(): void
+    {
+        $db = static::getContainer()->get(\Doctrine\DBAL\Connection::class);
+        $db->executeStatement("UPDATE earthquake SET magnitude = NULL, depth = NULL WHERE usgs_id = 'test-2'");
+        static::getContainer()->get(\Doctrine\ORM\EntityManagerInterface::class)->clear();
+        foreach (['sortMagnitude', 'sortDepth'] as $parameter) {
+            foreach (['asc', 'desc'] as $direction) {
+                $members = $this->collection([$parameter => $direction])['member'];
+                self::assertCount(3, $members);
+                self::assertSame('test-2', $members[2]['usgsId']);
+                self::assertArrayHasKey('magnitude', $members[2]);
+                self::assertNull($members[2]['magnitude']);
+                self::assertArrayHasKey('depth', $members[2]);
+                self::assertNull($members[2]['depth']);
+            }
+        }
+        $this->client->request('GET', '/api/earthquakes/map');
+        $features = json_decode($this->client->getResponse()->getContent(), true, flags: JSON_THROW_ON_ERROR)['features'];
+        $coordinates = array_column($features, 'geometry', 'id')['test-2']['coordinates'];
+        self::assertEquals([-123, 49], array_slice($coordinates, 0, 2));
+        self::assertNull($coordinates[2]);
+    }
+
     public function testPaginationLinksPreserveTotals(): void
     {
         $data = $this->collection(['itemsPerPage' => 2]);

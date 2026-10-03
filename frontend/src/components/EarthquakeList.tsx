@@ -4,7 +4,7 @@ import {
   useEarthquakes,
   type Filters,
 } from "../hooks/useEarthquakes";
-import { magnitudeLabel, type Earthquake } from "../lib/api";
+import { depthLabel, magnitudeLabel, type Earthquake } from "../lib/api";
 
 const EMPTY_QUAKES: Earthquake[] = [];
 
@@ -24,7 +24,9 @@ export default function EarthquakeList() {
   const { filters, draft, page, pageSize, sort, selectedId, mobileView } =
     state;
   const earthquakes = table.data?.member ?? [];
-  const loading = table.isPending || table.isPlaceholderData;
+  const loading = table.isPending;
+  // Keep the previous rows on screen while a refresh or page change loads.
+  const updating = table.isPlaceholderData;
   const error = table.error?.message ?? null;
   const hasNextPage = page < totalPages;
   const lastUpdated = table.dataUpdatedAt
@@ -79,7 +81,7 @@ export default function EarthquakeList() {
     <div className="page-controls">
       <button
         type="button"
-        disabled={loading || page === 1}
+        disabled={loading || updating || page === 1}
         onClick={() => changePage(page - 1)}
       >
         Previous
@@ -90,7 +92,7 @@ export default function EarthquakeList() {
       </span>
       <button
         type="button"
-        disabled={loading || error !== null || !hasNextPage}
+        disabled={loading || updating || error !== null || !hasNextPage}
         onClick={() => changePage(page + 1)}
       >
         Next
@@ -346,6 +348,7 @@ export default function EarthquakeList() {
               tabIndex={0}
               role="region"
               aria-label="Recent earthquake results"
+              aria-busy={updating}
             >
               <table>
                 <thead>
@@ -392,7 +395,7 @@ export default function EarthquakeList() {
                         </time>
                       </td>
                       <td className="depth-cell">
-                        {earthquake.depth.toFixed(2)} km
+                        {depthLabel(earthquake.depth)}
                       </td>
                     </tr>
                   ))}
